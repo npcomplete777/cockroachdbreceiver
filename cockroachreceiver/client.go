@@ -8,6 +8,27 @@ import (
     _ "github.com/lib/pq"
 )
 
+// CockroachClient defines the interface for interacting with CockroachDB
+type CockroachClient interface {
+    Close() error
+    GetQueryStats(ctx context.Context) ([]QueryStats, error)
+    GetTransactionStats(ctx context.Context) ([]TransactionStats, error)
+    GetActiveQueries(ctx context.Context) (int64, error)
+    GetActiveSessions(ctx context.Context) (int64, error)
+    GetQueryLatencyPercentiles(ctx context.Context) ([]QueryLatencyStats, error)
+    GetIndexUsage(ctx context.Context) ([]IndexUsageStats, error)
+    GetConnectionCount(ctx context.Context) (int64, error)
+    GetDatabaseCount(ctx context.Context) (int64, error)
+    GetTableSizes(ctx context.Context) ([]TableSizeStats, error)
+    GetContentionStats(ctx context.Context) ([]ContentionStats, error)
+    GetRangeHealth(ctx context.Context) (RangeHealthStats, error)
+    GetNodeStatus(ctx context.Context) ([]NodeStatus, error)
+    GetJobStats(ctx context.Context) ([]JobStats, error)
+    GetChangefeedLag(ctx context.Context) ([]ChangefeedLag, error)
+    GetSchemaChanges(ctx context.Context) ([]SchemaChange, error)
+    GetStatementErrors(ctx context.Context) ([]StatementError, error)
+}
+
 type cockroachClient struct {
     db           *sql.DB
     connStr      string
@@ -15,7 +36,7 @@ type cockroachClient struct {
     queryLimit   int
 }
 
-func newCockroachClient(cfg *Config) (*cockroachClient, error) {
+func newCockroachClient(cfg *Config) (CockroachClient, error) {
     db, err := sql.Open("postgres", cfg.ConnectionString)
     if err != nil {
         return nil, err
@@ -136,19 +157,7 @@ func (c *cockroachClient) GetQueryStats(ctx context.Context) ([]QueryStats, erro
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            metadata->>'query' as query,
-            (statistics->'statistics'->'cnt')::INT as execution_count,
-            (statistics->'statistics'->'runLat'->'mean')::FLOAT as mean_latency
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE metadata->>'query' IS NOT NULL
-        AND (statistics->'statistics'->'cnt')::INT > 0
-        ORDER BY (statistics->'statistics'->'cnt')::INT DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, queryStatsSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -170,14 +179,7 @@ func (c *cockroachClient) GetTransactionStats(ctx context.Context) ([]Transactio
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    rows, err := c.db.QueryContext(queryCtx, `
-        SELECT 
-            (statistics->'statistics'->'cnt')::INT as tx_count,
-            (statistics->'statistics'->'numRows'->'mean')::FLOAT as mean_rows
-        FROM crdb_internal.cluster_transaction_statistics
-        WHERE (statistics->'statistics'->'cnt')::INT > 0
-        LIMIT 10
-    `)
+    rows, err := c.db.QueryContext(queryCtx, transactionStatsSQL)
     if err != nil {
         return nil, err
     }
@@ -200,7 +202,7 @@ func (c *cockroachClient) GetActiveQueries(ctx context.Context) (int64, error) {
     defer cancel()
     
     var count int64
-    err := c.db.QueryRowContext(queryCtx, "SELECT count(*) FROM crdb_internal.cluster_queries").Scan(&count)
+    err := c.db.QueryRowContext(queryCtx, activeQueriesSQL).Scan(&count)
     return count, err
 }
 
@@ -209,7 +211,7 @@ func (c *cockroachClient) GetActiveSessions(ctx context.Context) (int64, error) 
     defer cancel()
     
     var count int64
-    err := c.db.QueryRowContext(queryCtx, "SELECT count(*) FROM crdb_internal.cluster_sessions").Scan(&count)
+    err := c.db.QueryRowContext(queryCtx, activeSessionsSQL).Scan(&count)
     return count, err
 }
 
@@ -217,21 +219,7 @@ func (c *cockroachClient) GetQueryLatencyPercentiles(ctx context.Context) ([]Que
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            metadata->>'query' as query,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p50')::FLOAT, 0) as p50,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p95')::FLOAT, 0) as p95,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p99')::FLOAT, 0) as p99,
-            COALESCE((statistics->'statistics'->'execStats'->'numErrors')::INT, 0) as errors
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE metadata->>'query' IS NOT NULL
-        AND (statistics->'statistics'->'cnt')::INT > 0
-        ORDER BY (statistics->'statistics'->'cnt')::INT DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, queryLatencyPercentilesSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -253,20 +241,7 @@ func (c *cockroachClient) GetIndexUsage(ctx context.Context) ([]IndexUsageStats,
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            t.name as table_name,
-            ti.index_name,
-            ius.total_reads
-        FROM crdb_internal.index_usage_statistics ius
-        JOIN crdb_internal.tables t ON ius.table_id = t.table_id
-        JOIN crdb_internal.table_indexes ti ON ius.table_id = ti.descriptor_id AND ius.index_id = ti.index_id
-        WHERE ius.total_reads > 0
-        ORDER BY ius.total_reads DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, indexUsageSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -289,10 +264,7 @@ func (c *cockroachClient) GetConnectionCount(ctx context.Context) (int64, error)
     defer cancel()
     
     var count int64
-    err := c.db.QueryRowContext(queryCtx, `
-        SELECT count(DISTINCT session_id) 
-        FROM crdb_internal.cluster_sessions
-    `).Scan(&count)
+    err := c.db.QueryRowContext(queryCtx, connectionCountSQL).Scan(&count)
     return count, err
 }
 
@@ -301,10 +273,7 @@ func (c *cockroachClient) GetDatabaseCount(ctx context.Context) (int64, error) {
     defer cancel()
     
     var count int64
-    err := c.db.QueryRowContext(queryCtx, `
-        SELECT count(*) FROM information_schema.schemata 
-        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'crdb_internal', 'pg_extension')
-    `).Scan(&count)
+    err := c.db.QueryRowContext(queryCtx, databaseCountSQL).Scan(&count)
     return count, err
 }
 
@@ -312,19 +281,7 @@ func (c *cockroachClient) GetTableSizes(ctx context.Context) ([]TableSizeStats, 
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            database_name,
-            name as table_name,
-            0 as disk_bytes,
-            0 as row_count
-        FROM crdb_internal.tables
-        WHERE database_name NOT IN ('system')
-        ORDER BY name
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, tableSizesSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -346,21 +303,7 @@ func (c *cockroachClient) GetContentionStats(ctx context.Context) ([]ContentionS
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            t.name as table_name,
-            COALESCE(ti.index_name, 'primary') as index_name,
-            ce.cumulative_contention_time::FLOAT / 1e9 as contention_seconds,
-            ce.num_contention_events
-        FROM crdb_internal.cluster_contention_events ce
-        JOIN crdb_internal.tables t ON ce.table_id = t.table_id
-        LEFT JOIN crdb_internal.table_indexes ti ON ce.table_id = ti.descriptor_id AND ce.index_id = ti.index_id
-        WHERE ce.num_contention_events > 0
-        ORDER BY ce.cumulative_contention_time DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, contentionStatsSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -385,29 +328,19 @@ func (c *cockroachClient) GetRangeHealth(ctx context.Context) (RangeHealthStats,
     var stats RangeHealthStats
     
     // Total ranges
-    err := c.db.QueryRowContext(queryCtx, `
-        SELECT count(*) FROM crdb_internal.ranges_no_leases
-    `).Scan(&stats.TotalRanges)
+    err := c.db.QueryRowContext(queryCtx, rangeHealthTotalSQL).Scan(&stats.TotalRanges)
     if err != nil {
         return stats, err
     }
     
-    // Under-replicated ranges (fewer than expected replicas based on array length)
-    err = c.db.QueryRowContext(queryCtx, `
-        SELECT count(*) 
-        FROM crdb_internal.ranges_no_leases 
-        WHERE array_length(voting_replicas, 1) < 3
-    `).Scan(&stats.UnderReplicatedRanges)
+    // Under-replicated ranges
+    err = c.db.QueryRowContext(queryCtx, rangeHealthUnderReplicatedSQL).Scan(&stats.UnderReplicatedRanges)
     if err != nil {
         return stats, err
     }
     
-    // Unavailable ranges (critical - no voting replicas)
-    err = c.db.QueryRowContext(queryCtx, `
-        SELECT count(*) 
-        FROM crdb_internal.ranges_no_leases 
-        WHERE array_length(voting_replicas, 1) IS NULL OR array_length(voting_replicas, 1) = 0
-    `).Scan(&stats.UnavailableRanges)
+    // Unavailable ranges
+    err = c.db.QueryRowContext(queryCtx, rangeHealthUnavailableSQL).Scan(&stats.UnavailableRanges)
     if err != nil {
         return stats, err
     }
@@ -419,14 +352,7 @@ func (c *cockroachClient) GetNodeStatus(ctx context.Context) ([]NodeStatus, erro
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    rows, err := c.db.QueryContext(queryCtx, `
-        SELECT 
-            node_id,
-            CASE WHEN expiration::TIMESTAMP > now() THEN true ELSE false END as is_live,
-            'n' || node_id::TEXT as address
-        FROM crdb_internal.gossip_liveness
-        ORDER BY node_id
-    `)
+    rows, err := c.db.QueryContext(queryCtx, nodeStatusSQL)
     if err != nil {
         // Return empty slice for serverless clusters where this table isn't available
         // This is expected behavior - serverless abstracts away node management
@@ -450,20 +376,7 @@ func (c *cockroachClient) GetJobStats(ctx context.Context) ([]JobStats, error) {
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            job_id,
-            job_type,
-            status,
-            COALESCE(NULLIF(running_status, ''), 'none') as running_status,
-            created::TEXT as created
-        FROM crdb_internal.jobs
-        WHERE status IN ('running', 'paused', 'reverting', 'pending')
-        ORDER BY created DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, jobStatsSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }
@@ -485,18 +398,7 @@ func (c *cockroachClient) GetChangefeedLag(ctx context.Context) ([]ChangefeedLag
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    rows, err := c.db.QueryContext(queryCtx, `
-        SELECT 
-            job_id,
-            CASE 
-                WHEN high_water_timestamp IS NOT NULL 
-                THEN extract(epoch from now()) - (high_water_timestamp::FLOAT / 1e9)
-                ELSE 0 
-            END as lag_seconds
-        FROM crdb_internal.jobs
-        WHERE job_type = 'CHANGEFEED' 
-        AND status = 'running'
-    `)
+    rows, err := c.db.QueryContext(queryCtx, changefeedLagSQL)
     if err != nil {
         return nil, err
     }
@@ -518,15 +420,7 @@ func (c *cockroachClient) GetSchemaChanges(ctx context.Context) ([]SchemaChange,
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    rows, err := c.db.QueryContext(queryCtx, `
-        SELECT 
-            name,
-            type,
-            state
-        FROM crdb_internal.schema_changes
-        WHERE state != 'done'
-        ORDER BY name
-    `)
+    rows, err := c.db.QueryContext(queryCtx, schemaChangesSQL)
     if err != nil {
         return nil, err
     }
@@ -548,18 +442,7 @@ func (c *cockroachClient) GetStatementErrors(ctx context.Context) ([]StatementEr
     queryCtx, cancel := c.createQueryContext(ctx)
     defer cancel()
     
-    query := `
-        SELECT 
-            metadata->>'query' as query,
-            COALESCE(statistics->'statistics'->'execStats'->>'lastErrorCode', 'unknown') as error_code,
-            (statistics->'statistics'->'execStats'->>'numErrors')::INT as error_count
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE (statistics->'statistics'->'execStats'->>'numErrors')::INT > 0
-        ORDER BY (statistics->'statistics'->'execStats'->>'numErrors')::INT DESC
-        LIMIT $1
-    `
-    
-    rows, err := c.db.QueryContext(queryCtx, query, c.queryLimit)
+    rows, err := c.db.QueryContext(queryCtx, statementErrorsSQL, c.queryLimit)
     if err != nil {
         return nil, err
     }

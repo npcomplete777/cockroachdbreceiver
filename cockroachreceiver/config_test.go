@@ -141,6 +141,33 @@ func TestConfigValidate(t *testing.T) {
             wantErr: true,
             errMsg:  "max_idle_connections cannot exceed max_open_connections",
         },
+        {
+            name: "valid enabled metrics",
+            config: Config{
+                ConnectionString:   "postgresql://user:pass@localhost:26257/db",
+                CollectionInterval: "1m",
+                QueryTimeout:       30 * time.Second,
+                QueryLimit:         20,
+                MaxOpenConns:       10,
+                MaxIdleConns:       5,
+                EnabledMetrics:     []string{"query", "session", "index"},
+            },
+            wantErr: false,
+        },
+        {
+            name: "invalid metric group",
+            config: Config{
+                ConnectionString:   "postgresql://user:pass@localhost:26257/db",
+                CollectionInterval: "1m",
+                QueryTimeout:       30 * time.Second,
+                QueryLimit:         20,
+                MaxOpenConns:       10,
+                MaxIdleConns:       5,
+                EnabledMetrics:     []string{"query", "invalid_group"},
+            },
+            wantErr: true,
+            errMsg:  "invalid metric group: invalid_group. Valid groups: query, transaction, session, index, table, contention, range, node, job, changefeed, schema, error",
+        },
     }
 
     for _, tt := range tests {
@@ -194,4 +221,68 @@ func TestConfigValidate_EdgeCases(t *testing.T) {
             }
         }
     })
+}
+
+func TestIsMetricEnabled(t *testing.T) {
+    tests := []struct {
+        name           string
+        enabledMetrics []string
+        checkMetric    string
+        want           bool
+    }{
+        {
+            name:           "empty enabled metrics - all enabled",
+            enabledMetrics: []string{},
+            checkMetric:    "query",
+            want:           true,
+        },
+        {
+            name:           "nil enabled metrics - all enabled",
+            enabledMetrics: nil,
+            checkMetric:    "session",
+            want:           true,
+        },
+        {
+            name:           "metric is enabled",
+            enabledMetrics: []string{"query", "session", "index"},
+            checkMetric:    "query",
+            want:           true,
+        },
+        {
+            name:           "metric is not enabled",
+            enabledMetrics: []string{"query", "session"},
+            checkMetric:    "index",
+            want:           false,
+        },
+        {
+            name:           "case insensitive match",
+            enabledMetrics: []string{"QUERY", "Session"},
+            checkMetric:    "query",
+            want:           true,
+        },
+        {
+            name:           "whitespace trimming",
+            enabledMetrics: []string{" query ", "session  "},
+            checkMetric:    "query",
+            want:           true,
+        },
+        {
+            name:           "all metric groups enabled explicitly",
+            enabledMetrics: []string{"query", "transaction", "session", "index", "table", "contention", "range", "node", "job", "changefeed", "schema", "error"},
+            checkMetric:    "changefeed",
+            want:           true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            cfg := Config{
+                EnabledMetrics: tt.enabledMetrics,
+            }
+            got := cfg.IsMetricEnabled(tt.checkMetric)
+            if got != tt.want {
+                t.Errorf("IsMetricEnabled(%q) = %v, want %v", tt.checkMetric, got, tt.want)
+            }
+        })
+    }
 }

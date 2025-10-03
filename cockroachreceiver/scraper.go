@@ -2,6 +2,7 @@ package cockroachreceiver
 
 import (
     "context"
+    "sync"
     "time"
     
     "go.opentelemetry.io/collector/component"
@@ -11,7 +12,9 @@ import (
 )
 
 type cockroachScraper struct {
-    client   *cockroachClient
+    client   CockroachClient
+    connStr  string
+    config   *Config
     logger   *zap.Logger
     settings component.TelemetrySettings
 }
@@ -25,6 +28,8 @@ func newScraper(cfg *Config, settings component.TelemetrySettings) *cockroachScr
     
     return &cockroachScraper{
         client:   client,
+        connStr:  cfg.ConnectionString,
+        config:   cfg,
         logger:   settings.Logger,
         settings: settings,
     }
@@ -48,13 +53,58 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
     resourceMetrics := metrics.ResourceMetrics().AppendEmpty()
     
     resource := resourceMetrics.Resource()
-    resource.Attributes().PutStr("cockroachdb.connection", s.client.connStr)
+    // SECURITY FIX: Sanitize connection string to remove credentials
+    sanitizedConn := sanitizeConnectionString(s.connStr)
+    resource.Attributes().PutStr("cockroachdb.endpoint", sanitizedConn)
     
     scopeMetrics := resourceMetrics.ScopeMetrics().AppendEmpty()
     scopeMetrics.Scope().SetName("cockroachreceiver")
     
     now := pcommon.NewTimestampFromTime(time.Now())
     
+    // Use mutex to protect concurrent writes to scopeMetrics
+    var mu sync.Mutex
+    var wg sync.WaitGroup
+    
+    // Collect all enabled metrics concurrently
+    collectors := []struct {
+        group   string
+        collect func(context.Context, pmetric.ScopeMetrics, pcommon.Timestamp)
+    }{
+        {MetricGroupQuery, s.collectQueryMetrics},
+        {MetricGroupTransaction, s.collectTransactionMetrics},
+        {MetricGroupSession, s.collectSessionMetrics},
+        {MetricGroupIndex, s.collectIndexMetrics},
+        {MetricGroupTable, s.collectTableMetrics},
+        {MetricGroupContention, s.collectContentionMetrics},
+        {MetricGroupRange, s.collectRangeMetrics},
+        {MetricGroupNode, s.collectNodeMetrics},
+        {MetricGroupJob, s.collectJobMetrics},
+        {MetricGroupChangefeed, s.collectChangefeedMetrics},
+        {MetricGroupSchema, s.collectSchemaMetrics},
+        {MetricGroupError, s.collectErrorMetrics},
+    }
+    
+    for _, collector := range collectors {
+        if s.config.IsMetricEnabled(collector.group) {
+            wg.Add(1)
+            go func(c func(context.Context, pmetric.ScopeMetrics, pcommon.Timestamp)) {
+                defer wg.Done()
+                mu.Lock()
+                c(ctx, scopeMetrics, now)
+                mu.Unlock()
+            }(collector.collect)
+        }
+    }
+    
+    wg.Wait()
+    
+    return metrics, nil
+}
+
+// Collector functions for each metric group
+
+func (s *cockroachScraper) collectQueryMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     // Get query statistics
     queryStats, err := s.client.GetQueryStats(ctx)
     if err != nil {
@@ -63,14 +113,25 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
         s.addQueryMetrics(scopeMetrics, queryStats, now)
     }
     
-    // Get transaction statistics
+    // Get query latency percentiles
+    latencyStats, err := s.client.GetQueryLatencyPercentiles(ctx)
+    if err != nil {
+        s.logger.Error("Failed to get latency percentiles", zap.Error(err))
+    } else {
+        s.addLatencyPercentileMetrics(scopeMetrics, latencyStats, now)
+    }
+}
+
+func (s *cockroachScraper) collectTransactionMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     txStats, err := s.client.GetTransactionStats(ctx)
     if err != nil {
         s.logger.Error("Failed to get transaction stats", zap.Error(err))
     } else {
         s.addTransactionMetrics(scopeMetrics, txStats, now)
     }
-    
+}
+
+func (s *cockroachScraper) collectSessionMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     // Get active queries count
     activeQueries, err := s.client.GetActiveQueries(ctx)
     if err != nil {
@@ -87,22 +148,6 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
         s.addActiveSessionsMetric(scopeMetrics, activeSessions, now)
     }
     
-    // Get query latency percentiles
-    latencyStats, err := s.client.GetQueryLatencyPercentiles(ctx)
-    if err != nil {
-        s.logger.Error("Failed to get latency percentiles", zap.Error(err))
-    } else {
-        s.addLatencyPercentileMetrics(scopeMetrics, latencyStats, now)
-    }
-    
-    // Get index usage
-    indexStats, err := s.client.GetIndexUsage(ctx)
-    if err != nil {
-        s.logger.Error("Failed to get index usage", zap.Error(err))
-    } else {
-        s.addIndexUsageMetrics(scopeMetrics, indexStats, now)
-    }
-    
     // Get connection count
     connCount, err := s.client.GetConnectionCount(ctx)
     if err != nil {
@@ -110,7 +155,18 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
     } else {
         s.addConnectionCountMetric(scopeMetrics, connCount, now)
     }
-    
+}
+
+func (s *cockroachScraper) collectIndexMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
+    indexStats, err := s.client.GetIndexUsage(ctx)
+    if err != nil {
+        s.logger.Error("Failed to get index usage", zap.Error(err))
+    } else {
+        s.addIndexUsageMetrics(scopeMetrics, indexStats, now)
+    }
+}
+
+func (s *cockroachScraper) collectTableMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     // Get database count
     dbCount, err := s.client.GetDatabaseCount(ctx)
     if err != nil {
@@ -126,65 +182,72 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
     } else {
         s.addTableSizeMetrics(scopeMetrics, tableSizes, now)
     }
-    
-    // Get contention stats
+}
+
+func (s *cockroachScraper) collectContentionMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     contentionStats, err := s.client.GetContentionStats(ctx)
     if err != nil {
         s.logger.Error("Failed to get contention stats", zap.Error(err))
     } else {
         s.addContentionMetrics(scopeMetrics, contentionStats, now)
     }
-    
-    // Get range health
+}
+
+func (s *cockroachScraper) collectRangeMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     rangeHealth, err := s.client.GetRangeHealth(ctx)
     if err != nil {
         s.logger.Error("Failed to get range health", zap.Error(err))
     } else {
         s.addRangeHealthMetrics(scopeMetrics, rangeHealth, now)
     }
-    
-    // Get node status
+}
+
+func (s *cockroachScraper) collectNodeMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     nodeStatus, err := s.client.GetNodeStatus(ctx)
     if err != nil {
         s.logger.Error("Failed to get node status", zap.Error(err))
     } else {
         s.addNodeStatusMetrics(scopeMetrics, nodeStatus, now)
     }
-    
-    // Get job stats
+}
+
+func (s *cockroachScraper) collectJobMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     jobStats, err := s.client.GetJobStats(ctx)
     if err != nil {
         s.logger.Error("Failed to get job stats", zap.Error(err))
     } else {
         s.addJobMetrics(scopeMetrics, jobStats, now)
     }
-    
-    // Get changefeed lag
+}
+
+func (s *cockroachScraper) collectChangefeedMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     changefeedLag, err := s.client.GetChangefeedLag(ctx)
     if err != nil {
         s.logger.Error("Failed to get changefeed lag", zap.Error(err))
     } else {
         s.addChangefeedLagMetrics(scopeMetrics, changefeedLag, now)
     }
-    
-    // Get schema changes
+}
+
+func (s *cockroachScraper) collectSchemaMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     schemaChanges, err := s.client.GetSchemaChanges(ctx)
     if err != nil {
         s.logger.Error("Failed to get schema changes", zap.Error(err))
     } else {
         s.addSchemaChangeMetrics(scopeMetrics, schemaChanges, now)
     }
-    
-    // Get statement errors
+}
+
+func (s *cockroachScraper) collectErrorMetrics(ctx context.Context, scopeMetrics pmetric.ScopeMetrics, now pcommon.Timestamp) {
     stmtErrors, err := s.client.GetStatementErrors(ctx)
     if err != nil {
         s.logger.Error("Failed to get statement errors", zap.Error(err))
     } else {
         s.addStatementErrorMetrics(scopeMetrics, stmtErrors, now)
     }
-    
-    return metrics, nil
 }
+
+// Metric adding functions (unchanged)
 
 func (s *cockroachScraper) addQueryMetrics(scopeMetrics pmetric.ScopeMetrics, stats []QueryStats, now pcommon.Timestamp) {
     // Query execution count
