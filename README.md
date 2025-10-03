@@ -1,13 +1,5 @@
 # CockroachDB Receiver
 
-| Status        |                  |
-|---------------|------------------|
-| Stability     | [alpha]          |
-| Distributions | []               |
-| Issues        | [![Open issues](https://img.shields.io/github/issues-search/open-telemetry/opentelemetry-collector-contrib?query=is%3Aissue%20is%3Aopen%20label%3Areceiver%2Fcockroachdb%20&label=open&color=orange&logo=opentelemetry)](https://github.com/open-telemetry/opentelemetry-collector-contrib/issues?q=is%3Aopen+is%3Aissue+label%3Areceiver%2Fcockroachdb) |
-
-[alpha]: https://github.com/open-telemetry/opentelemetry-collector#alpha
-
 ## Overview
 
 The CockroachDB receiver connects to a CockroachDB cluster and collects comprehensive metrics about database performance, health, and operations. It queries internal CockroachDB system tables to gather metrics across 12 distinct categories.
