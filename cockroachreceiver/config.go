@@ -1,134 +1,80 @@
 package cockroachreceiver
 
 import (
-    "errors"
-    "strings"
-    "time"
+	"fmt"
+	"time"
 )
-
-// Metric group names for selective collection
-const (
-    MetricGroupQuery       = "query"
-    MetricGroupTransaction = "transaction"
-    MetricGroupSession     = "session"
-    MetricGroupIndex       = "index"
-    MetricGroupTable       = "table"
-    MetricGroupContention  = "contention"
-    MetricGroupRange       = "range"
-    MetricGroupNode        = "node"
-    MetricGroupJob         = "job"
-    MetricGroupChangefeed  = "changefeed"
-    MetricGroupSchema      = "schema"
-    MetricGroupError       = "error"
-)
-
-var defaultEnabledMetrics = []string{
-    MetricGroupQuery,
-    MetricGroupTransaction,
-    MetricGroupSession,
-    MetricGroupIndex,
-    MetricGroupTable,
-    MetricGroupContention,
-    MetricGroupRange,
-    MetricGroupNode,
-    MetricGroupJob,
-    MetricGroupChangefeed,
-    MetricGroupSchema,
-    MetricGroupError,
-}
-
-var validMetricGroups = map[string]bool{
-    MetricGroupQuery:       true,
-    MetricGroupTransaction: true,
-    MetricGroupSession:     true,
-    MetricGroupIndex:       true,
-    MetricGroupTable:       true,
-    MetricGroupContention:  true,
-    MetricGroupRange:       true,
-    MetricGroupNode:        true,
-    MetricGroupJob:         true,
-    MetricGroupChangefeed:  true,
-    MetricGroupSchema:      true,
-    MetricGroupError:       true,
-}
 
 type Config struct {
-    ConnectionString   string        `mapstructure:"connection_string"`
-    CollectionInterval string        `mapstructure:"collection_interval"`
-    
-    // Query configuration
-    QueryTimeout     time.Duration `mapstructure:"query_timeout"`
-    QueryLimit       int           `mapstructure:"query_limit"`
-    
-    // Connection pool configuration
-    MaxOpenConns     int           `mapstructure:"max_open_connections"`
-    MaxIdleConns     int           `mapstructure:"max_idle_connections"`
-    ConnMaxLifetime  time.Duration `mapstructure:"connection_max_lifetime"`
-    ConnMaxIdleTime  time.Duration `mapstructure:"connection_max_idle_time"`
-    
-    // Selective metric collection
-    // If empty, all metrics are collected. Otherwise, only specified groups are collected.
-    EnabledMetrics   []string      `mapstructure:"enabled_metrics"`
+	ConnectionString string        `mapstructure:"connection_string"`
+	CollectionInterval string      `mapstructure:"collection_interval"`
+	
+	// Connection pool settings
+	MaxOpenConnections int           `mapstructure:"max_open_connections"`
+	MaxIdleConnections int           `mapstructure:"max_idle_connections"`
+	ConnectionMaxLifetime string    `mapstructure:"connection_max_lifetime"`
+	ConnectionMaxIdleTime string    `mapstructure:"connection_max_idle_time"`
+	QueryTimeout string              `mapstructure:"query_timeout"`
+	
+	// Selective metric collection
+	Metrics MetricsConfig `mapstructure:"metrics"`
 }
 
-func (cfg *Config) Validate() error {
-    if cfg.ConnectionString == "" {
-        return errors.New("connection_string is required")
-    }
-    
-    if cfg.CollectionInterval == "" {
-        return errors.New("collection_interval is required")
-    }
-    
-    if _, err := time.ParseDuration(cfg.CollectionInterval); err != nil {
-        return errors.New("collection_interval must be a valid duration (e.g., '1m', '30s')")
-    }
-    
-    if cfg.QueryTimeout <= 0 {
-        return errors.New("query_timeout must be positive")
-    }
-    
-    if cfg.QueryLimit <= 0 {
-        return errors.New("query_limit must be positive")
-    }
-    
-    if cfg.MaxOpenConns <= 0 {
-        return errors.New("max_open_connections must be positive")
-    }
-    
-    if cfg.MaxIdleConns < 0 {
-        return errors.New("max_idle_connections must be non-negative")
-    }
-    
-    if cfg.MaxIdleConns > cfg.MaxOpenConns {
-        return errors.New("max_idle_connections cannot exceed max_open_connections")
-    }
-    
-    // Validate enabled_metrics if specified
-    if len(cfg.EnabledMetrics) > 0 {
-        for _, metric := range cfg.EnabledMetrics {
-            metricLower := strings.ToLower(strings.TrimSpace(metric))
-            if !validMetricGroups[metricLower] {
-                return errors.New("invalid metric group: " + metric + ". Valid groups: query, transaction, session, index, table, contention, range, node, job, changefeed, schema, error")
-            }
-        }
-    }
-    
-    return nil
+type MetricsConfig struct {
+	// Production-safe metrics (low overhead, recommended for all environments)
+	StatementStatistics    bool `mapstructure:"statement_statistics"`     // Query performance
+	TransactionStatistics  bool `mapstructure:"transaction_statistics"`   // Transaction performance
+	IndexUsageStatistics   bool `mapstructure:"index_usage_statistics"`   // Index usage patterns
+	ClusterQueries         bool `mapstructure:"cluster_queries"`          // Active queries
+	ClusterSessions        bool `mapstructure:"cluster_sessions"`         // Active sessions
+	ClusterTransactions    bool `mapstructure:"cluster_transactions"`     // Active transactions
+	
+	// Production-safe contention metrics (moderate overhead)
+	ClusterLocks              bool `mapstructure:"cluster_locks"`               // Lock states
+	ClusterContendedIndexes   bool `mapstructure:"cluster_contended_indexes"`   // Contended indexes
+	ClusterContendedKeys      bool `mapstructure:"cluster_contended_keys"`      // Contended keys
+	ClusterContendedTables    bool `mapstructure:"cluster_contended_tables"`    // Contended tables
+	ClusterContentionEvents   bool `mapstructure:"cluster_contention_events"`   // Contention history
+	TransactionContentionEvents bool `mapstructure:"transaction_contention_events"` // Detailed contention
+	
+	// NOT production-safe (expensive RPC fan-out, use only for troubleshooting)
+	RangesNoLeases    bool `mapstructure:"ranges_no_leases"`     // Range distribution (EXPENSIVE)
+	GossipLiveness    bool `mapstructure:"gossip_liveness"`      // Node liveness (EXPENSIVE)
+	Jobs              bool `mapstructure:"jobs"`                 // Background jobs (EXPENSIVE)
+	SchemaChanges     bool `mapstructure:"schema_changes"`       // Schema operations (EXPENSIVE)
+	NodeMetrics       bool `mapstructure:"node_metrics"`         // Node-level metrics (EXPENSIVE)
+	KVNodeStatus      bool `mapstructure:"kv_node_status"`       // KV layer status (EXPENSIVE)
 }
 
-// IsMetricEnabled checks if a metric group is enabled for collection
-func (cfg *Config) IsMetricEnabled(metricGroup string) bool {
-    // If no metrics specified, all are enabled
-    if len(cfg.EnabledMetrics) == 0 {
-        return true
-    }
-    
-    metricLower := strings.ToLower(strings.TrimSpace(metricGroup))
-    for _, enabled := range cfg.EnabledMetrics {
-        if strings.ToLower(strings.TrimSpace(enabled)) == metricLower {
-            return true
-        }
-    }
-    return false
+func (c *Config) Validate() error {
+	if c.ConnectionString == "" {
+		return fmt.Errorf("connection_string is required")
+	}
+	
+	if c.CollectionInterval == "" {
+		c.CollectionInterval = "60s"
+	}
+	
+	if _, err := time.ParseDuration(c.CollectionInterval); err != nil {
+		return fmt.Errorf("invalid collection_interval: %w", err)
+	}
+	
+	// Set defaults
+	if c.MaxOpenConnections == 0 {
+		c.MaxOpenConnections = 10
+	}
+	if c.MaxIdleConnections == 0 {
+		c.MaxIdleConnections = 5
+	}
+	if c.ConnectionMaxLifetime == "" {
+		c.ConnectionMaxLifetime = "1h"
+	}
+	if c.ConnectionMaxIdleTime == "" {
+		c.ConnectionMaxIdleTime = "10m"
+	}
+	if c.QueryTimeout == "" {
+		c.QueryTimeout = "30s"
+	}
+	
+	return nil
 }

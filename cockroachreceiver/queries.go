@@ -1,183 +1,315 @@
 package cockroachreceiver
 
-// SQL queries for CockroachDB metrics collection
-// All queries are defined as constants for maintainability and reusability
-
 const (
-    // Query statistics
-    queryStatsSQL = `
-        SELECT 
-            metadata->>'query' as query,
-            (statistics->'statistics'->'cnt')::INT as execution_count,
-            (statistics->'statistics'->'runLat'->'mean')::FLOAT as mean_latency
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE metadata->>'query' IS NOT NULL
-        AND (statistics->'statistics'->'cnt')::INT > 0
-        ORDER BY (statistics->'statistics'->'cnt')::INT DESC
-        LIMIT $1
-    `
+	// PRODUCTION SAFE - Query Performance
+	QueryStatementStatistics = `
+SELECT 
+    aggregated_ts,
+    encode(fingerprint_id, 'hex') as fingerprint_id,
+    encode(transaction_fingerprint_id, 'hex') as transaction_fingerprint_id,
+    encode(plan_hash, 'hex') as plan_hash,
+    app_name,
+    metadata->>'query' as query_text,
+    metadata->>'db' as database_name,
+    metadata->>'querySummary' as query_summary,
+    metadata->>'stmtTyp' as statement_type,
+    (metadata->>'fullScan')::boolean as full_scan,
+    (metadata->>'vec')::boolean as vectorized,
+    (metadata->>'implicitTxn')::boolean as implicit_txn,
+    (statistics->'statistics'->>'cnt')::bigint as execution_count,
+    (statistics->'statistics'->'svcLat'->>'mean')::float as service_latency_mean,
+    (statistics->'statistics'->'runLat'->>'mean')::float as run_latency_mean,
+    (statistics->'statistics'->'parseLat'->>'mean')::float as parse_latency_mean,
+    (statistics->'statistics'->'planLat'->>'mean')::float as plan_latency_mean,
+    (statistics->'statistics'->'ovhLat'->>'mean')::float as overhead_latency_mean,
+    (statistics->'statistics'->'numRows'->>'mean')::float as rows_mean,
+    (statistics->'statistics'->'rowsRead'->>'mean')::float as rows_read_mean,
+    (statistics->'statistics'->'bytesRead'->>'mean')::float as bytes_read_mean,
+    (statistics->'statistics'->>'maxRetries')::bigint as max_retries,
+    statistics->'statistics'->>'lastExecAt' as last_execution_at
+FROM crdb_internal.statement_statistics
+WHERE aggregated_ts > NOW() - INTERVAL '1 hour'
+LIMIT 1000;`
 
-    // Transaction statistics
-    transactionStatsSQL = `
-        SELECT 
-            (statistics->'statistics'->'cnt')::INT as tx_count,
-            (statistics->'statistics'->'numRows'->'mean')::FLOAT as mean_rows
-        FROM crdb_internal.cluster_transaction_statistics
-        WHERE (statistics->'statistics'->'cnt')::INT > 0
-        LIMIT 10
-    `
+	// PRODUCTION SAFE - Transaction Performance
+	QueryTransactionStatistics = `
+SELECT
+    aggregated_ts,
+    encode(fingerprint_id, 'hex') as fingerprint_id,
+    app_name,
+    (statistics->'execution_statistics'->>'cnt')::bigint as execution_count,
+    (statistics->'statistics'->>'cnt')::bigint as total_count,
+    (statistics->'statistics'->'svcLat'->>'mean')::float as service_latency_mean,
+    (statistics->'statistics'->'commitLat'->>'mean')::float as commit_latency_mean,
+    (statistics->'statistics'->'retryLat'->>'mean')::float as retry_latency_mean,
+    (statistics->'statistics'->'numRows'->>'mean')::float as rows_mean,
+    (statistics->'statistics'->'rowsRead'->>'mean')::float as rows_read_mean,
+    (statistics->'statistics'->'rowsWritten'->>'mean')::float as rows_written_mean,
+    (statistics->'statistics'->'bytesRead'->>'mean')::float as bytes_read_mean,
+    (statistics->'statistics'->>'maxRetries')::bigint as max_retries,
+    (statistics->'execution_statistics'->'contentionTime'->>'mean')::float as contention_time_mean
+FROM crdb_internal.transaction_statistics
+WHERE aggregated_ts > NOW() - INTERVAL '1 hour'
+LIMIT 1000;`
 
-    // Active queries count
-    activeQueriesSQL = `SELECT count(*) FROM crdb_internal.cluster_queries`
+	// PRODUCTION SAFE - Index Usage
+	QueryIndexUsageStatistics = `
+SELECT
+    ti.descriptor_name as table_name,
+    ti.index_name,
+    us.total_reads,
+    us.last_read
+FROM crdb_internal.index_usage_statistics AS us
+JOIN crdb_internal.table_indexes ti
+    ON us.index_id = ti.index_id AND us.table_id = ti.descriptor_id
+ORDER BY total_reads DESC
+LIMIT 500;`
 
-    // Active sessions count
-    activeSessionsSQL = `SELECT count(*) FROM crdb_internal.cluster_sessions`
+	// PRODUCTION SAFE - Active Queries
+	QueryClusterQueries = `
+SELECT
+    query_id,
+    encode(txn_id::BYTES, 'hex') as txn_id,
+    node_id,
+    session_id,
+    user_name,
+    start,
+    query,
+    client_address,
+    application_name,
+    distributed,
+    phase
+FROM crdb_internal.cluster_queries
+LIMIT 500;`
 
-    // Query latency percentiles
-    queryLatencyPercentilesSQL = `
-        SELECT 
-            metadata->>'query' as query,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p50')::FLOAT, 0) as p50,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p95')::FLOAT, 0) as p95,
-            COALESCE((statistics->'statistics'->'latencyInfo'->'p99')::FLOAT, 0) as p99,
-            COALESCE((statistics->'statistics'->'execStats'->'numErrors')::INT, 0) as errors
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE metadata->>'query' IS NOT NULL
-        AND (statistics->'statistics'->'cnt')::INT > 0
-        ORDER BY (statistics->'statistics'->'cnt')::INT DESC
-        LIMIT $1
-    `
+	// PRODUCTION SAFE - Active Sessions
+	QueryClusterSessions = `
+SELECT
+    node_id,
+    session_id,
+    user_name,
+    client_address,
+    application_name,
+    active_queries,
+    last_active_query,
+    session_start,
+    active_query_start,
+    kv_txn,
+    alloc_bytes,
+    max_alloc_bytes
+FROM crdb_internal.cluster_sessions
+LIMIT 500;`
 
-    // Index usage statistics
-    indexUsageSQL = `
-        SELECT 
-            t.name as table_name,
-            ti.index_name,
-            ius.total_reads
-        FROM crdb_internal.index_usage_statistics ius
-        JOIN crdb_internal.tables t ON ius.table_id = t.table_id
-        JOIN crdb_internal.table_indexes ti ON ius.table_id = ti.descriptor_id AND ius.index_id = ti.index_id
-        WHERE ius.total_reads > 0
-        ORDER BY ius.total_reads DESC
-        LIMIT $1
-    `
+	// PRODUCTION SAFE - Active Transactions
+	QueryClusterTransactions = `
+SELECT
+    encode(id::BYTES, 'hex') as id,
+    node_id,
+    session_id,
+    start,
+    txn_string,
+    application_name,
+    num_stmts,
+    num_retries,
+    num_auto_retries
+FROM crdb_internal.cluster_transactions
+LIMIT 500;`
 
-    // Connection count
-    connectionCountSQL = `
-        SELECT count(DISTINCT session_id) 
-        FROM crdb_internal.cluster_sessions
-    `
+	// PRODUCTION SAFE - Lock Information (WARNING: can be expensive on large clusters)
+	QueryClusterLocks = `
+SELECT
+    range_id,
+    table_id,
+    database_name,
+    schema_name,
+    table_name,
+    index_name,
+    lock_key_pretty,
+    encode(txn_id::BYTES, 'hex') as txn_id,
+    ts,
+    lock_strength,
+    durability,
+    granted,
+    contended,
+    duration
+FROM crdb_internal.cluster_locks
+WHERE duration > INTERVAL '1 second'
+LIMIT 1000;`
 
-    // Database count
-    databaseCountSQL = `
-        SELECT count(*) FROM information_schema.schemata 
-        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'crdb_internal', 'pg_extension')
-    `
+	// PRODUCTION SAFE - Contended Indexes
+	QueryClusterContendedIndexes = `
+SELECT
+    database_name,
+    schema_name,
+    table_name,
+    index_name,
+    num_contention_events
+FROM crdb_internal.cluster_contended_indexes
+ORDER BY num_contention_events DESC
+LIMIT 100;`
 
-    // Table sizes
-    tableSizesSQL = `
-        SELECT 
-            database_name,
-            name as table_name,
-            0 as disk_bytes,
-            0 as row_count
-        FROM crdb_internal.tables
-        WHERE database_name NOT IN ('system')
-        ORDER BY name
-        LIMIT $1
-    `
+	// PRODUCTION SAFE - Contended Keys
+	QueryClusterContendedKeys = `
+SELECT
+    database_name,
+    schema_name,
+    table_name,
+    index_name,
+    encode(key, 'hex') as key_hex,
+    num_contention_events
+FROM crdb_internal.cluster_contended_keys
+ORDER BY num_contention_events DESC
+LIMIT 100;`
 
-    // Contention statistics
-    contentionStatsSQL = `
-        SELECT 
-            t.name as table_name,
-            COALESCE(ti.index_name, 'primary') as index_name,
-            ce.cumulative_contention_time::FLOAT / 1e9 as contention_seconds,
-            ce.num_contention_events
-        FROM crdb_internal.cluster_contention_events ce
-        JOIN crdb_internal.tables t ON ce.table_id = t.table_id
-        LEFT JOIN crdb_internal.table_indexes ti ON ce.table_id = ti.descriptor_id AND ce.index_id = ti.index_id
-        WHERE ce.num_contention_events > 0
-        ORDER BY ce.cumulative_contention_time DESC
-        LIMIT $1
-    `
+	// PRODUCTION SAFE - Contended Tables
+	QueryClusterContendedTables = `
+SELECT
+    database_name,
+    schema_name,
+    table_name,
+    num_contention_events
+FROM crdb_internal.cluster_contended_tables
+ORDER BY num_contention_events DESC
+LIMIT 100;`
 
-    // Range health - total ranges
-    rangeHealthTotalSQL = `SELECT count(*) FROM crdb_internal.ranges_no_leases`
+	// PRODUCTION SAFE - Contention Events
+	QueryClusterContentionEvents = `
+SELECT
+    table_id,
+    index_id,
+    num_contention_events,
+    cumulative_contention_time,
+    encode(key, 'hex') as key_hex,
+    encode(txn_id::BYTES, 'hex') as txn_id,
+    count
+FROM crdb_internal.cluster_contention_events
+ORDER BY cumulative_contention_time DESC
+LIMIT 500;`
 
-    // Range health - under-replicated ranges
-    // Note: Hardcoded threshold of 3 replicas - may need to be configurable for different replication factors
-    rangeHealthUnderReplicatedSQL = `
-        SELECT count(*) 
-        FROM crdb_internal.ranges_no_leases 
-        WHERE array_length(voting_replicas, 1) < 3
-    `
+	// PRODUCTION SAFE - Transaction Contention Events
+	QueryTransactionContentionEvents = `
+SELECT
+    collection_ts,
+    encode(blocking_txn_id::BYTES, 'hex') as blocking_txn_id,
+    encode(blocking_txn_fingerprint_id, 'hex') as blocking_txn_fingerprint_id,
+    encode(waiting_txn_id::BYTES, 'hex') as waiting_txn_id,
+    encode(waiting_txn_fingerprint_id, 'hex') as waiting_txn_fingerprint_id,
+    waiting_stmt_id,
+    encode(waiting_stmt_fingerprint_id, 'hex') as waiting_stmt_fingerprint_id,
+    contention_duration,
+    contending_pretty_key,
+    database_name,
+    schema_name,
+    table_name,
+    index_name,
+    contention_type
+FROM crdb_internal.transaction_contention_events
+WHERE collection_ts > NOW() - INTERVAL '1 hour'
+ORDER BY contention_duration DESC
+LIMIT 500;`
 
-    // Range health - unavailable ranges
-    rangeHealthUnavailableSQL = `
-        SELECT count(*) 
-        FROM crdb_internal.ranges_no_leases 
-        WHERE array_length(voting_replicas, 1) IS NULL OR array_length(voting_replicas, 1) = 0
-    `
+	// NOT PRODUCTION SAFE - Range Health (expensive cluster-wide RPC)
+	QueryRangesNoLeases = `
+SELECT
+    range_id,
+    start_key,
+    start_pretty,
+    end_key,
+    end_pretty,
+    database_name,
+    table_name,
+    index_name,
+    replicas,
+    replica_localities,
+    voting_replicas,
+    non_voting_replicas,
+    split_enforced_until
+FROM crdb_internal.ranges_no_leases
+LIMIT 1000;`
 
-    // Node status from gossip liveness
-    nodeStatusSQL = `
-        SELECT 
-            node_id,
-            CASE WHEN expiration::TIMESTAMP > now() THEN true ELSE false END as is_live,
-            'n' || node_id::TEXT as address
-        FROM crdb_internal.gossip_liveness
-        ORDER BY node_id
-    `
+	// NOT PRODUCTION SAFE - Node Liveness (unstable schema)
+	QueryGossipLiveness = `
+SELECT
+    node_id,
+    epoch,
+    expiration,
+    draining,
+    decommissioning,
+    membership,
+    updated_at
+FROM crdb_internal.gossip_liveness
+LIMIT 100;`
 
-    // Job statistics
-    jobStatsSQL = `
-        SELECT 
-            job_id,
-            job_type,
-            status,
-            COALESCE(NULLIF(running_status, ''), 'none') as running_status,
-            created::TEXT as created
-        FROM crdb_internal.jobs
-        WHERE status IN ('running', 'paused', 'reverting', 'pending')
-        ORDER BY created DESC
-        LIMIT $1
-    `
+	// NOT PRODUCTION SAFE - Background Jobs
+	QueryJobs = `
+SELECT
+    job_id,
+    job_type,
+    description,
+    status,
+    created,
+    started,
+    finished,
+    modified,
+    fraction_completed,
+    error,
+    coordinator_id
+FROM crdb_internal.jobs
+WHERE status IN ('running', 'pending', 'paused')
+LIMIT 500;`
 
-    // Changefeed lag
-    changefeedLagSQL = `
-        SELECT 
-            job_id,
-            CASE 
-                WHEN high_water_timestamp IS NOT NULL 
-                THEN extract(epoch from now()) - (high_water_timestamp::FLOAT / 1e9)
-                ELSE 0 
-            END as lag_seconds
-        FROM crdb_internal.jobs
-        WHERE job_type = 'CHANGEFEED' 
-        AND status = 'running'
-    `
+	// NOT PRODUCTION SAFE - Schema Changes
+	QuerySchemaChanges = `
+SELECT
+    table_id,
+    parent_id,
+    name,
+    type,
+    target_id,
+    target_name,
+    state,
+    direction
+FROM crdb_internal.schema_changes
+LIMIT 100;`
 
-    // Schema changes in progress
-    schemaChangesSQL = `
-        SELECT 
-            name,
-            type,
-            state
-        FROM crdb_internal.schema_changes
-        WHERE state != 'done'
-        ORDER BY name
-    `
+	// NOT PRODUCTION SAFE - Node Metrics
+	QueryNodeMetrics = `
+SELECT
+    node_id,
+    store_id,
+    name,
+    value
+FROM crdb_internal.node_metrics
+WHERE name IN (
+    'sql.conns',
+    'sql.txns.open',
+    'sql.mem.current',
+    'sys.cpu.user.percent',
+    'sys.cpu.sys.percent',
+    'sys.rss'
+)
+LIMIT 1000;`
 
-    // Statement errors
-    statementErrorsSQL = `
-        SELECT 
-            metadata->>'query' as query,
-            COALESCE(statistics->'statistics'->'execStats'->>'lastErrorCode', 'unknown') as error_code,
-            (statistics->'statistics'->'execStats'->>'numErrors')::INT as error_count
-        FROM crdb_internal.cluster_statement_statistics
-        WHERE (statistics->'statistics'->'execStats'->>'numErrors')::INT > 0
-        ORDER BY (statistics->'statistics'->'execStats'->>'numErrors')::INT DESC
-        LIMIT $1
-    `
+	// NOT PRODUCTION SAFE - KV Node Status
+	QueryKVNodeStatus = `
+SELECT
+    node_id,
+    network,
+    address,
+    attrs,
+    locality,
+    server_version,
+    go_version,
+    tag,
+    time,
+    revision,
+    cgo_compiler,
+    platform,
+    distribution,
+    type,
+    dependencies,
+    started_at,
+    updated_at
+FROM crdb_internal.kv_node_status
+LIMIT 100;`
 )
