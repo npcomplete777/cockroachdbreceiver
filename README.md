@@ -809,11 +809,6 @@ otelcol-contrib --config config.yaml
 |------------------|---------------------|-------------------|
 | v1.0.0+ | v22.1+ | v0.136.0+ |
 
-**Tested Configurations:**
-- CockroachDB v22.2 (Dedicated)
-- CockroachDB v23.1 (Dedicated)
-- CockroachDB Serverless (latest)
-
 ## License
 
 Apache License 2.0
