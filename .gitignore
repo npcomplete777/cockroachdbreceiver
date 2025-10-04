@@ -58,3 +58,4 @@ testdata/output/
 # OCB generated files
 components.go
 main.go
+config-BACKUP.yaml

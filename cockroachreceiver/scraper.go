@@ -19,23 +19,18 @@ type cockroachScraper struct {
 }
 
 func newScraper(cfg *Config, settings component.TelemetrySettings) *cockroachScraper {
-	// Create client immediately
 	db, err := sql.Open("postgres", cfg.ConnectionString)
 	if err != nil {
 		settings.Logger.Error("Failed to open database", zap.Error(err))
 		return nil
 	}
 
-	// Configure connection pool
-	maxLifetime, _ := time.ParseDuration(cfg.ConnectionMaxLifetime)
-	maxIdleTime, _ := time.ParseDuration(cfg.ConnectionMaxIdleTime)
-
+	// Configure connection pool - these are already time.Duration
 	db.SetMaxOpenConns(cfg.MaxOpenConnections)
 	db.SetMaxIdleConns(cfg.MaxIdleConnections)
-	db.SetConnMaxLifetime(maxLifetime)
-	db.SetConnMaxIdleTime(maxIdleTime)
+	db.SetConnMaxLifetime(cfg.ConnectionMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnectionMaxIdleTime)
 
-	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -71,14 +66,13 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 		return pmetric.NewMetrics(), fmt.Errorf("database client not initialized")
 	}
 
-	queryTimeout, _ := time.ParseDuration(s.config.QueryTimeout)
-	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
+	// QueryTimeout is already a time.Duration, use it directly
+	ctx, cancel := context.WithTimeout(ctx, s.config.QueryTimeout)
 	defer cancel()
 
 	metrics := pmetric.NewMetrics()
 	rm := metrics.ResourceMetrics().AppendEmpty()
 
-	// Add resource attributes
 	attrs := rm.Resource().Attributes()
 	attrs.PutStr("service.name", "cockroachdb")
 	attrs.PutStr("db.system", "cockroachdb")
@@ -87,7 +81,6 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 	sm.Scope().SetName("github.com/npcomplete777/cockroachdb-receiver")
 	sm.Scope().SetVersion("1.0.0")
 
-	// Production-safe metrics
 	if s.config.Metrics.StatementStatistics {
 		if err := s.scrapeStatementStatistics(ctx, sm); err != nil {
 			s.logger.Error("Failed to scrape statement statistics", zap.Error(err))
@@ -124,7 +117,6 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 		}
 	}
 
-	// Contention metrics
 	if s.config.Metrics.ClusterLocks {
 		if err := s.scrapeClusterLocks(ctx, sm); err != nil {
 			s.logger.Error("Failed to scrape cluster locks", zap.Error(err))
@@ -161,7 +153,6 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 		}
 	}
 
-	// Non-production safe metrics with warnings
 	if s.config.Metrics.RangesNoLeases {
 		s.logger.Warn("⚠️  Collecting ranges_no_leases - triggers expensive cluster-wide RPC")
 		if err := s.scrapeRanges(ctx, sm); err != nil {
@@ -207,122 +198,135 @@ func (s *cockroachScraper) scrape(ctx context.Context) (pmetric.Metrics, error) 
 	return metrics, nil
 }
 
-// ============================================================================
-// PRODUCTION SAFE METRICS
-// ============================================================================
-
+// CRITICAL: This function includes ALL dimensional data including query text
 func (s *cockroachScraper) scrapeStatementStatistics(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryStatementStatistics)
+	// Pass QueryLimit parameter
+	rows, err := s.client.QueryContext(ctx, queryStatementStatistics, s.config.QueryLimit)
 	if err != nil {
-		return fmt.Errorf("query failed: %w", err)
+		return fmt.Errorf("query statement statistics: %w", err)
 	}
 	defer rows.Close()
 
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
+
 	for rows.Next() {
 		var (
-			aggregatedTs      time.Time
-			fingerprintID     string
-			txnFingerprintID  string
-			planHash          string
-			appName           string
-			queryText         sql.NullString
-			databaseName      sql.NullString
-			querySummary      sql.NullString
-			stmtType          sql.NullString
-			fullScan          sql.NullBool
-			vectorized        sql.NullBool
-			implicitTxn       sql.NullBool
-			executionCount    sql.NullInt64
-			serviceLatencyMean sql.NullFloat64
-			runLatencyMean    sql.NullFloat64
-			parseLatencyMean  sql.NullFloat64
-			planLatencyMean   sql.NullFloat64
-			overheadLatencyMean sql.NullFloat64
-			rowsMean          sql.NullFloat64
-			rowsReadMean      sql.NullFloat64
-			bytesReadMean     sql.NullFloat64
-			maxRetries        sql.NullInt64
-			lastExecAt        sql.NullString
+			fingerprintID   string
+			appName         sql.NullString
+			database        sql.NullString
+			query           sql.NullString
+			stmtType        sql.NullString
+			execCount       sql.NullInt64
+			svcLatMean      sql.NullFloat64
+			parseLatMean    sql.NullFloat64
+			planLatMean     sql.NullFloat64
+			runLatMean      sql.NullFloat64
+			rowsReadMean    sql.NullFloat64
+			rowsWrittenMean sql.NullFloat64
+			bytesReadMean   sql.NullFloat64
+			maxRetries      sql.NullInt64
+			errorCount      sql.NullInt64
+			lastErrorCode   sql.NullString
 		)
 
 		if err := rows.Scan(
-			&aggregatedTs, &fingerprintID, &txnFingerprintID, &planHash, &appName,
-			&queryText, &databaseName, &querySummary, &stmtType,
-			&fullScan, &vectorized, &implicitTxn,
-			&executionCount, &serviceLatencyMean, &runLatencyMean,
-			&parseLatencyMean, &planLatencyMean, &overheadLatencyMean,
-			&rowsMean, &rowsReadMean, &bytesReadMean, &maxRetries, &lastExecAt,
+			&fingerprintID,
+			&appName,
+			&database,
+			&query,
+			&stmtType,
+			&execCount,
+			&svcLatMean,
+			&parseLatMean,
+			&planLatMean,
+			&runLatMean,
+			&rowsReadMean,
+			&rowsWrittenMean,
+			&bytesReadMean,
+			&maxRetries,
+			&errorCount,
+			&lastErrorCode,
 		); err != nil {
 			s.logger.Warn("Failed to scan statement statistics row", zap.Error(err))
 			continue
 		}
 
-		// Create gauge metrics for statement statistics
-		timestamp := pcommon.NewTimestampFromTime(aggregatedTs)
-
-		// Execution count
-		if executionCount.Valid {
+		// Helper function to create metrics with ALL dimensional data
+		addMetric := func(name, description, unit string, isInt bool, value interface{}) {
 			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.statement.execution.count")
-			m.SetDescription("Number of times this statement was executed")
-			m.SetUnit("1")
+			m.SetName(name)
+			m.SetDescription(description)
+			m.SetUnit(unit)
 			g := m.SetEmptyGauge()
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
-			dp.SetIntValue(executionCount.Int64)
+
+			if isInt {
+				if v, ok := value.(sql.NullInt64); ok && v.Valid {
+					dp.SetIntValue(v.Int64)
+				} else if v, ok := value.(int64); ok {
+					dp.SetIntValue(v)
+				}
+			} else {
+				if v, ok := value.(sql.NullFloat64); ok && v.Valid {
+					dp.SetDoubleValue(v.Float64)
+				} else if v, ok := value.(float64); ok {
+					dp.SetDoubleValue(v)
+				}
+			}
+
+			// Add ALL dimensional data as attributes
 			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-			if databaseName.Valid {
-				dp.Attributes().PutStr("database", databaseName.String)
+			if appName.Valid && appName.String != "" {
+				dp.Attributes().PutStr("app_name", appName.String)
+			} else {
+				dp.Attributes().PutStr("app_name", "cockroachdb-internal")
+			}
+			if database.Valid {
+				dp.Attributes().PutStr("database", database.String)
 			}
 			if stmtType.Valid {
 				dp.Attributes().PutStr("statement_type", stmtType.String)
 			}
-		}
-
-		// Service latency
-		if serviceLatencyMean.Valid {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.statement.latency.service")
-			m.SetDescription("Average service latency (parse + plan + run)")
-			m.SetUnit("s")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetDoubleValue(serviceLatencyMean.Float64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-		}
-
-		// Run latency
-		if runLatencyMean.Valid {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.statement.latency.run")
-			m.SetDescription("Average execution latency")
-			m.SetUnit("s")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetDoubleValue(runLatencyMean.Float64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-		}
-
-		// Rows read
-		if rowsReadMean.Valid {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.statement.rows.read")
-			m.SetDescription("Average number of rows read")
-			m.SetUnit("1")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetDoubleValue(rowsReadMean.Float64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-			if fullScan.Valid {
-				dp.Attributes().PutBool("full_scan", fullScan.Bool)
+			// CRITICAL: Add actual query text so you see SQL instead of hex IDs
+			if query.Valid {
+				dp.Attributes().PutStr("query", query.String)
 			}
+			if lastErrorCode.Valid && lastErrorCode.String != "" {
+				dp.Attributes().PutStr("last_error_code", lastErrorCode.String)
+			}
+		}
+
+		// Create metrics with full dimensional data
+		if execCount.Valid {
+			addMetric("cockroachdb.statement.execution.count", "Number of times this statement was executed", "1", true, execCount)
+		}
+		if errorCount.Valid {
+			addMetric("cockroachdb.statement.error.count", "Number of errors for this statement", "1", true, errorCount)
+		}
+		if maxRetries.Valid {
+			addMetric("cockroachdb.statement.retries.max", "Maximum number of retries for this statement", "1", true, maxRetries)
+		}
+		if svcLatMean.Valid {
+			addMetric("cockroachdb.statement.latency.service.mean", "Average service latency", "s", false, svcLatMean)
+		}
+		if parseLatMean.Valid {
+			addMetric("cockroachdb.statement.latency.parse.mean", "Average parsing latency", "s", false, parseLatMean)
+		}
+		if planLatMean.Valid {
+			addMetric("cockroachdb.statement.latency.plan.mean", "Average planning latency", "s", false, planLatMean)
+		}
+		if runLatMean.Valid {
+			addMetric("cockroachdb.statement.latency.run.mean", "Average execution latency", "s", false, runLatMean)
+		}
+		if rowsReadMean.Valid {
+			addMetric("cockroachdb.statement.rows.read.mean", "Average rows read", "1", false, rowsReadMean)
+		}
+		if rowsWrittenMean.Valid {
+			addMetric("cockroachdb.statement.rows.written.mean", "Average rows written", "1", false, rowsWrittenMean)
+		}
+		if bytesReadMean.Valid {
+			addMetric("cockroachdb.statement.bytes.read.mean", "Average bytes read", "By", false, bytesReadMean)
 		}
 	}
 
@@ -330,91 +334,7 @@ func (s *cockroachScraper) scrapeStatementStatistics(ctx context.Context, sm pme
 }
 
 func (s *cockroachScraper) scrapeTransactionStatistics(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryTransactionStatistics)
-	if err != nil {
-		return fmt.Errorf("query failed: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var (
-			aggregatedTs     time.Time
-			fingerprintID    string
-			appName          string
-			executionCount   sql.NullInt64
-			totalCount       sql.NullInt64
-			serviceLatencyMean sql.NullFloat64
-			commitLatencyMean  sql.NullFloat64
-			retryLatencyMean   sql.NullFloat64
-			rowsMean         sql.NullFloat64
-			rowsReadMean     sql.NullFloat64
-			rowsWrittenMean  sql.NullFloat64
-			bytesReadMean    sql.NullFloat64
-			maxRetries       sql.NullInt64
-			contentionTimeMean sql.NullFloat64
-		)
-
-		if err := rows.Scan(
-			&aggregatedTs, &fingerprintID, &appName,
-			&executionCount, &totalCount,
-			&serviceLatencyMean, &commitLatencyMean, &retryLatencyMean,
-			&rowsMean, &rowsReadMean, &rowsWrittenMean, &bytesReadMean,
-			&maxRetries, &contentionTimeMean,
-		); err != nil {
-			s.logger.Warn("Failed to scan transaction statistics row", zap.Error(err))
-			continue
-		}
-
-		timestamp := pcommon.NewTimestampFromTime(aggregatedTs)
-
-		// Execution count
-		if executionCount.Valid {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.transaction.execution.count")
-			m.SetDescription("Number of times this transaction was executed")
-			m.SetUnit("1")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetIntValue(executionCount.Int64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-		}
-
-		// Service latency
-		if serviceLatencyMean.Valid {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.transaction.latency.service")
-			m.SetDescription("Average transaction service latency")
-			m.SetUnit("s")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetDoubleValue(serviceLatencyMean.Float64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-		}
-
-		// Contention time
-		if contentionTimeMean.Valid && contentionTimeMean.Float64 > 0 {
-			m := sm.Metrics().AppendEmpty()
-			m.SetName("cockroachdb.transaction.contention.time")
-			m.SetDescription("Average time spent in contention")
-			m.SetUnit("s")
-			g := m.SetEmptyGauge()
-			dp := g.DataPoints().AppendEmpty()
-			dp.SetTimestamp(timestamp)
-			dp.SetDoubleValue(contentionTimeMean.Float64)
-			dp.Attributes().PutStr("fingerprint_id", fingerprintID)
-			dp.Attributes().PutStr("app_name", appName)
-		}
-	}
-
-	return rows.Err()
-}
-
-func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryIndexUsageStatistics)
+	rows, err := s.client.QueryContext(ctx, queryTransactionStatistics, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -424,13 +344,98 @@ func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, sm pmetric.Scop
 
 	for rows.Next() {
 		var (
-			tableName  string
-			indexName  string
-			totalReads sql.NullInt64
-			lastRead   sql.NullTime
+			fingerprintID      sql.NullString
+			appName            sql.NullString
+			executionCount     sql.NullInt64
+			serviceLatencyMean sql.NullFloat64
+			commitLatencyMean  sql.NullFloat64
+			retryLatencyMean   sql.NullFloat64
+			rowsReadMean       sql.NullFloat64
+			rowsWrittenMean    sql.NullFloat64
+			bytesReadMean      sql.NullFloat64
+			maxRetries         sql.NullInt64
 		)
 
-		if err := rows.Scan(&tableName, &indexName, &totalReads, &lastRead); err != nil {
+		if err := rows.Scan(
+			&fingerprintID,
+			&appName,
+			&executionCount,
+			&serviceLatencyMean,
+			&commitLatencyMean,
+			&retryLatencyMean,
+			&rowsReadMean,
+			&rowsWrittenMean,
+			&bytesReadMean,
+			&maxRetries,
+		); err != nil {
+			s.logger.Warn("Failed to scan transaction statistics row", zap.Error(err))
+			continue
+		}
+
+		addMetric := func(name, description, unit string, isInt bool, value interface{}) {
+			m := sm.Metrics().AppendEmpty()
+			m.SetName(name)
+			m.SetDescription(description)
+			m.SetUnit(unit)
+			g := m.SetEmptyGauge()
+			dp := g.DataPoints().AppendEmpty()
+			dp.SetTimestamp(timestamp)
+
+			if isInt {
+				if v, ok := value.(sql.NullInt64); ok && v.Valid {
+					dp.SetIntValue(v.Int64)
+				}
+			} else {
+				if v, ok := value.(sql.NullFloat64); ok && v.Valid {
+					dp.SetDoubleValue(v.Float64)
+				}
+			}
+
+			if fingerprintID.Valid {
+				dp.Attributes().PutStr("fingerprint_id", fingerprintID.String)
+			}
+			if appName.Valid && appName.String != "" {
+				dp.Attributes().PutStr("app_name", appName.String)
+			} else {
+				dp.Attributes().PutStr("app_name", "cockroachdb-internal")
+			}
+		}
+
+		if executionCount.Valid {
+			addMetric("cockroachdb.transaction.execution.count", "Transaction execution count", "1", true, executionCount)
+		}
+		if serviceLatencyMean.Valid {
+			addMetric("cockroachdb.transaction.latency.service", "Average transaction service latency", "s", false, serviceLatencyMean)
+		}
+		if commitLatencyMean.Valid {
+			addMetric("cockroachdb.transaction.latency.commit", "Average commit latency", "s", false, commitLatencyMean)
+		}
+		if retryLatencyMean.Valid {
+			addMetric("cockroachdb.transaction.latency.retry", "Average retry latency", "s", false, retryLatencyMean)
+		}
+	}
+
+	return rows.Err()
+}
+
+func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, sm pmetric.ScopeMetrics) error {
+	rows, err := s.client.QueryContext(ctx, queryIndexUsageStatistics, s.config.QueryLimit)
+	if err != nil {
+		return fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
+
+	for rows.Next() {
+		var (
+			tableName              sql.NullString
+			indexName              sql.NullString
+			totalReads             sql.NullInt64
+			secondsSinceLastRead   sql.NullFloat64
+		)
+
+		if err := rows.Scan(&tableName, &indexName, &totalReads, &secondsSinceLastRead); err != nil {
 			s.logger.Warn("Failed to scan index usage row", zap.Error(err))
 			continue
 		}
@@ -444,8 +449,12 @@ func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, sm pmetric.Scop
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
 			dp.SetIntValue(totalReads.Int64)
-			dp.Attributes().PutStr("table", tableName)
-			dp.Attributes().PutStr("index", indexName)
+			if tableName.Valid {
+				dp.Attributes().PutStr("table", tableName.String)
+			}
+			if indexName.Valid {
+				dp.Attributes().PutStr("index", indexName.String)
+			}
 		}
 	}
 
@@ -453,7 +462,7 @@ func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, sm pmetric.Scop
 }
 
 func (s *cockroachScraper) scrapeClusterQueries(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterQueries)
+	rows, err := s.client.QueryContext(ctx, queryClusterQueries, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -462,28 +471,21 @@ func (s *cockroachScraper) scrapeClusterQueries(ctx context.Context, sm pmetric.
 	count := 0
 	for rows.Next() {
 		var (
-			queryID     string
-			txnID       sql.NullString
-			nodeID      sql.NullInt64
-			sessionID   string
-			userName    string
-			start       time.Time
-			query       string
-			clientAddr  string
-			appName     string
-			distributed bool
-			phase       string
+			queryID         sql.NullString
+			nodeID          sql.NullInt64
+			userName        sql.NullString
+			appName         sql.NullString
+			durationSeconds sql.NullFloat64
+			query           sql.NullString
 		)
 
-		if err := rows.Scan(&queryID, &txnID, &nodeID, &sessionID, &userName,
-			&start, &query, &clientAddr, &appName, &distributed, &phase); err != nil {
+		if err := rows.Scan(&queryID, &nodeID, &userName, &appName, &durationSeconds, &query); err != nil {
 			s.logger.Warn("Failed to scan cluster queries row", zap.Error(err))
 			continue
 		}
 		count++
 	}
 
-	// Emit count of active queries
 	m := sm.Metrics().AppendEmpty()
 	m.SetName("cockroachdb.cluster.queries.active")
 	m.SetDescription("Number of currently active queries")
@@ -497,7 +499,7 @@ func (s *cockroachScraper) scrapeClusterQueries(ctx context.Context, sm pmetric.
 }
 
 func (s *cockroachScraper) scrapeClusterSessions(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterSessions)
+	rows, err := s.client.QueryContext(ctx, queryClusterSessions, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -508,29 +510,20 @@ func (s *cockroachScraper) scrapeClusterSessions(ctx context.Context, sm pmetric
 
 	for rows.Next() {
 		var (
-			nodeID           sql.NullInt64
-			sessionID        string
-			userName         string
-			clientAddr       string
-			appName          string
-			activeQueries    string
-			lastActiveQuery  string
-			sessionStart     time.Time
-			activeQueryStart sql.NullTime
-			kvTxn            sql.NullString
-			allocBytes       sql.NullInt64
-			maxAllocBytes    sql.NullInt64
+			sessionID       sql.NullString
+			nodeID          sql.NullInt64
+			userName        sql.NullString
+			appName         sql.NullString
+			allocBytes      sql.NullInt64
+			sessionAgeSeconds sql.NullFloat64
 		)
 
-		if err := rows.Scan(&nodeID, &sessionID, &userName, &clientAddr, &appName,
-			&activeQueries, &lastActiveQuery, &sessionStart, &activeQueryStart,
-			&kvTxn, &allocBytes, &maxAllocBytes); err != nil {
+		if err := rows.Scan(&sessionID, &nodeID, &userName, &appName, &allocBytes, &sessionAgeSeconds); err != nil {
 			s.logger.Warn("Failed to scan cluster sessions row", zap.Error(err))
 			continue
 		}
 		count++
 
-		// Memory usage per session
 		if allocBytes.Valid {
 			m := sm.Metrics().AppendEmpty()
 			m.SetName("cockroachdb.session.memory.allocated")
@@ -540,13 +533,18 @@ func (s *cockroachScraper) scrapeClusterSessions(ctx context.Context, sm pmetric
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
 			dp.SetIntValue(allocBytes.Int64)
-			dp.Attributes().PutStr("session_id", sessionID)
-			dp.Attributes().PutStr("user", userName)
-			dp.Attributes().PutStr("app_name", appName)
+			if sessionID.Valid {
+				dp.Attributes().PutStr("session_id", sessionID.String)
+			}
+			if userName.Valid {
+				dp.Attributes().PutStr("user", userName.String)
+			}
+			if appName.Valid && appName.String != "" {
+				dp.Attributes().PutStr("app_name", appName.String)
+			}
 		}
 	}
 
-	// Active sessions count
 	m := sm.Metrics().AppendEmpty()
 	m.SetName("cockroachdb.cluster.sessions.active")
 	m.SetDescription("Number of active sessions")
@@ -560,7 +558,7 @@ func (s *cockroachScraper) scrapeClusterSessions(ctx context.Context, sm pmetric
 }
 
 func (s *cockroachScraper) scrapeClusterTransactions(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterTransactions)
+	rows, err := s.client.QueryContext(ctx, queryClusterTransactions, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -569,26 +567,19 @@ func (s *cockroachScraper) scrapeClusterTransactions(ctx context.Context, sm pme
 	count := 0
 	for rows.Next() {
 		var (
-			id             string
-			nodeID         sql.NullInt64
-			sessionID      string
-			start          time.Time
-			txnString      string
-			appName        string
-			numStmts       sql.NullInt64
-			numRetries     sql.NullInt64
-			numAutoRetries sql.NullInt64
+			txnID           sql.NullString
+			nodeID          sql.NullInt64
+			appName         sql.NullString
+			durationSeconds sql.NullFloat64
 		)
 
-		if err := rows.Scan(&id, &nodeID, &sessionID, &start, &txnString,
-			&appName, &numStmts, &numRetries, &numAutoRetries); err != nil {
+		if err := rows.Scan(&txnID, &nodeID, &appName, &durationSeconds); err != nil {
 			s.logger.Warn("Failed to scan cluster transactions row", zap.Error(err))
 			continue
 		}
 		count++
 	}
 
-	// Active transactions count
 	m := sm.Metrics().AppendEmpty()
 	m.SetName("cockroachdb.cluster.transactions.active")
 	m.SetDescription("Number of active transactions")
@@ -601,92 +592,59 @@ func (s *cockroachScraper) scrapeClusterTransactions(ctx context.Context, sm pme
 	return rows.Err()
 }
 
-// ============================================================================
-// CONTENTION METRICS (Production-safe but moderate overhead)
-// ============================================================================
-
 func (s *cockroachScraper) scrapeClusterLocks(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterLocks)
+	rows, err := s.client.QueryContext(ctx, queryClusterLocks, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
 
-	totalLocks := 0
-	grantedLocks := 0
-	contentedLocks := 0
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
 
 	for rows.Next() {
 		var (
-			rangeID       sql.NullInt64
-			tableID       sql.NullInt64
-			databaseName  sql.NullString
-			schemaName    sql.NullString
-			tableName     sql.NullString
-			indexName     sql.NullString
-			lockKeyPretty sql.NullString
-			txnID         sql.NullString
-			ts            sql.NullTime
-			lockStrength  sql.NullString
-			durability    sql.NullString
-			granted       sql.NullBool
-			contended     sql.NullBool
-			duration      sql.NullString
+			databaseName      sql.NullString
+			tableName         sql.NullString
+			lockStrength      sql.NullString
+			granted           sql.NullBool
+			lockCount         sql.NullInt64
+			maxDurationSeconds sql.NullFloat64
 		)
 
-		if err := rows.Scan(&rangeID, &tableID, &databaseName, &schemaName, &tableName,
-			&indexName, &lockKeyPretty, &txnID, &ts, &lockStrength, &durability,
-			&granted, &contended, &duration); err != nil {
+		if err := rows.Scan(&databaseName, &tableName, &lockStrength, &granted, &lockCount, &maxDurationSeconds); err != nil {
 			s.logger.Warn("Failed to scan cluster locks row", zap.Error(err))
 			continue
 		}
 
-		totalLocks++
-		if granted.Valid && granted.Bool {
-			grantedLocks++
-		}
-		if contended.Valid && contended.Bool {
-			contentedLocks++
+		if lockCount.Valid {
+			m := sm.Metrics().AppendEmpty()
+			m.SetName("cockroachdb.cluster.locks.count")
+			m.SetDescription("Number of locks")
+			m.SetUnit("1")
+			g := m.SetEmptyGauge()
+			dp := g.DataPoints().AppendEmpty()
+			dp.SetTimestamp(timestamp)
+			dp.SetIntValue(lockCount.Int64)
+			if databaseName.Valid {
+				dp.Attributes().PutStr("database", databaseName.String)
+			}
+			if tableName.Valid {
+				dp.Attributes().PutStr("table", tableName.String)
+			}
+			if lockStrength.Valid {
+				dp.Attributes().PutStr("lock_strength", lockStrength.String)
+			}
+			if granted.Valid {
+				dp.Attributes().PutBool("granted", granted.Bool)
+			}
 		}
 	}
-
-	timestamp := pcommon.NewTimestampFromTime(time.Now())
-
-	// Total locks
-	m := sm.Metrics().AppendEmpty()
-	m.SetName("cockroachdb.cluster.locks.total")
-	m.SetDescription("Total number of locks")
-	m.SetUnit("1")
-	g := m.SetEmptyGauge()
-	dp := g.DataPoints().AppendEmpty()
-	dp.SetTimestamp(timestamp)
-	dp.SetIntValue(int64(totalLocks))
-
-	// Granted locks
-	m2 := sm.Metrics().AppendEmpty()
-	m2.SetName("cockroachdb.cluster.locks.granted")
-	m2.SetDescription("Number of granted locks")
-	m2.SetUnit("1")
-	g2 := m2.SetEmptyGauge()
-	dp2 := g2.DataPoints().AppendEmpty()
-	dp2.SetTimestamp(timestamp)
-	dp2.SetIntValue(int64(grantedLocks))
-
-	// Contended locks
-	m3 := sm.Metrics().AppendEmpty()
-	m3.SetName("cockroachdb.cluster.locks.contended")
-	m3.SetDescription("Number of contended locks")
-	m3.SetUnit("1")
-	g3 := m3.SetEmptyGauge()
-	dp3 := g3.DataPoints().AppendEmpty()
-	dp3.SetTimestamp(timestamp)
-	dp3.SetIntValue(int64(contentedLocks))
 
 	return rows.Err()
 }
 
 func (s *cockroachScraper) scrapeContendedIndexes(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterContendedIndexes)
+	rows, err := s.client.QueryContext(ctx, queryClusterContendedIndexes, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -696,10 +654,10 @@ func (s *cockroachScraper) scrapeContendedIndexes(ctx context.Context, sm pmetri
 
 	for rows.Next() {
 		var (
-			databaseName        string
-			schemaName          string
-			tableName           string
-			indexName           string
+			databaseName        sql.NullString
+			schemaName          sql.NullString
+			tableName           sql.NullString
+			indexName           sql.NullString
 			numContentionEvents sql.NullInt64
 		)
 
@@ -717,10 +675,18 @@ func (s *cockroachScraper) scrapeContendedIndexes(ctx context.Context, sm pmetri
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
 			dp.SetIntValue(numContentionEvents.Int64)
-			dp.Attributes().PutStr("database", databaseName)
-			dp.Attributes().PutStr("schema", schemaName)
-			dp.Attributes().PutStr("table", tableName)
-			dp.Attributes().PutStr("index", indexName)
+			if databaseName.Valid {
+				dp.Attributes().PutStr("database", databaseName.String)
+			}
+			if schemaName.Valid {
+				dp.Attributes().PutStr("schema", schemaName.String)
+			}
+			if tableName.Valid {
+				dp.Attributes().PutStr("table", tableName.String)
+			}
+			if indexName.Valid {
+				dp.Attributes().PutStr("index", indexName.String)
+			}
 		}
 	}
 
@@ -728,7 +694,7 @@ func (s *cockroachScraper) scrapeContendedIndexes(ctx context.Context, sm pmetri
 }
 
 func (s *cockroachScraper) scrapeContendedKeys(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterContendedKeys)
+	rows, err := s.client.QueryContext(ctx, queryClusterContendedKeys, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -738,15 +704,14 @@ func (s *cockroachScraper) scrapeContendedKeys(ctx context.Context, sm pmetric.S
 
 	for rows.Next() {
 		var (
-			databaseName        string
-			schemaName          string
-			tableName           string
-			indexName           string
-			keyHex              string
+			databaseName        sql.NullString
+			schemaName          sql.NullString
+			tableName           sql.NullString
+			indexName           sql.NullString
 			numContentionEvents sql.NullInt64
 		)
 
-		if err := rows.Scan(&databaseName, &schemaName, &tableName, &indexName, &keyHex, &numContentionEvents); err != nil {
+		if err := rows.Scan(&databaseName, &schemaName, &tableName, &indexName, &numContentionEvents); err != nil {
 			s.logger.Warn("Failed to scan contended keys row", zap.Error(err))
 			continue
 		}
@@ -760,10 +725,15 @@ func (s *cockroachScraper) scrapeContendedKeys(ctx context.Context, sm pmetric.S
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
 			dp.SetIntValue(numContentionEvents.Int64)
-			dp.Attributes().PutStr("database", databaseName)
-			dp.Attributes().PutStr("table", tableName)
-			dp.Attributes().PutStr("index", indexName)
-			dp.Attributes().PutStr("key", keyHex[:16]) // Truncate for cardinality
+			if databaseName.Valid {
+				dp.Attributes().PutStr("database", databaseName.String)
+			}
+			if tableName.Valid {
+				dp.Attributes().PutStr("table", tableName.String)
+			}
+			if indexName.Valid {
+				dp.Attributes().PutStr("index", indexName.String)
+			}
 		}
 	}
 
@@ -771,7 +741,7 @@ func (s *cockroachScraper) scrapeContendedKeys(ctx context.Context, sm pmetric.S
 }
 
 func (s *cockroachScraper) scrapeContendedTables(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterContendedTables)
+	rows, err := s.client.QueryContext(ctx, queryClusterContendedTables, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -781,9 +751,9 @@ func (s *cockroachScraper) scrapeContendedTables(ctx context.Context, sm pmetric
 
 	for rows.Next() {
 		var (
-			databaseName        string
-			schemaName          string
-			tableName           string
+			databaseName        sql.NullString
+			schemaName          sql.NullString
+			tableName           sql.NullString
 			numContentionEvents sql.NullInt64
 		)
 
@@ -801,9 +771,15 @@ func (s *cockroachScraper) scrapeContendedTables(ctx context.Context, sm pmetric
 			dp := g.DataPoints().AppendEmpty()
 			dp.SetTimestamp(timestamp)
 			dp.SetIntValue(numContentionEvents.Int64)
-			dp.Attributes().PutStr("database", databaseName)
-			dp.Attributes().PutStr("schema", schemaName)
-			dp.Attributes().PutStr("table", tableName)
+			if databaseName.Valid {
+				dp.Attributes().PutStr("database", databaseName.String)
+			}
+			if schemaName.Valid {
+				dp.Attributes().PutStr("schema", schemaName.String)
+			}
+			if tableName.Valid {
+				dp.Attributes().PutStr("table", tableName.String)
+			}
 		}
 	}
 
@@ -811,28 +787,23 @@ func (s *cockroachScraper) scrapeContendedTables(ctx context.Context, sm pmetric
 }
 
 func (s *cockroachScraper) scrapeContentionEvents(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryClusterContentionEvents)
+	rows, err := s.client.QueryContext(ctx, queryClusterContentionEvents, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
 
 	totalEvents := 0
-	var totalContentionTime float64
 
 	for rows.Next() {
 		var (
-			tableID                  sql.NullInt64
-			indexID                  sql.NullInt64
-			numContentionEvents      sql.NullInt64
-			cumulativeContentionTime sql.NullString
-			keyHex                   sql.NullString
-			txnID                    sql.NullString
-			count                    sql.NullInt64
+			tableID                     sql.NullInt64
+			indexID                     sql.NullInt64
+			numContentionEvents         sql.NullInt64
+			cumulativeContentionSeconds sql.NullFloat64
 		)
 
-		if err := rows.Scan(&tableID, &indexID, &numContentionEvents, &cumulativeContentionTime,
-			&keyHex, &txnID, &count); err != nil {
+		if err := rows.Scan(&tableID, &indexID, &numContentionEvents, &cumulativeContentionSeconds); err != nil {
 			s.logger.Warn("Failed to scan contention events row", zap.Error(err))
 			continue
 		}
@@ -840,15 +811,7 @@ func (s *cockroachScraper) scrapeContentionEvents(ctx context.Context, sm pmetri
 		if numContentionEvents.Valid {
 			totalEvents += int(numContentionEvents.Int64)
 		}
-
-		// Parse interval string to seconds (simplified)
-		if cumulativeContentionTime.Valid {
-			// Would need proper interval parsing here
-			totalContentionTime += 0.001 // Placeholder
-		}
 	}
-
-	timestamp := pcommon.NewTimestampFromTime(time.Now())
 
 	m := sm.Metrics().AppendEmpty()
 	m.SetName("cockroachdb.contention.events.total")
@@ -856,14 +819,14 @@ func (s *cockroachScraper) scrapeContentionEvents(ctx context.Context, sm pmetri
 	m.SetUnit("1")
 	g := m.SetEmptyGauge()
 	dp := g.DataPoints().AppendEmpty()
-	dp.SetTimestamp(timestamp)
+	dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
 	dp.SetIntValue(int64(totalEvents))
 
 	return rows.Err()
 }
 
 func (s *cockroachScraper) scrapeTransactionContentionEvents(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryTransactionContentionEvents)
+	rows, err := s.client.QueryContext(ctx, queryTransactionContentionEvents, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -872,26 +835,13 @@ func (s *cockroachScraper) scrapeTransactionContentionEvents(ctx context.Context
 	count := 0
 	for rows.Next() {
 		var (
-			collectionTs             time.Time
-			blockingTxnID            string
-			blockingTxnFingerprintID string
-			waitingTxnID             string
-			waitingTxnFingerprintID  string
-			waitingStmtID            string
-			waitingStmtFingerprintID string
-			contentionDuration       sql.NullString
-			contentingPrettyKey      sql.NullString
-			databaseName             sql.NullString
-			schemaName               sql.NullString
-			tableName                sql.NullString
-			indexName                sql.NullString
-			contentionType           sql.NullString
+			databaseName            sql.NullString
+			tableName               sql.NullString
+			contentionType          sql.NullString
+			contentionDurationSeconds sql.NullFloat64
 		)
 
-		if err := rows.Scan(&collectionTs, &blockingTxnID, &blockingTxnFingerprintID,
-			&waitingTxnID, &waitingTxnFingerprintID, &waitingStmtID, &waitingStmtFingerprintID,
-			&contentionDuration, &contentingPrettyKey, &databaseName, &schemaName,
-			&tableName, &indexName, &contentionType); err != nil {
+		if err := rows.Scan(&databaseName, &tableName, &contentionType, &contentionDurationSeconds); err != nil {
 			s.logger.Warn("Failed to scan transaction contention events row", zap.Error(err))
 			continue
 		}
@@ -910,58 +860,61 @@ func (s *cockroachScraper) scrapeTransactionContentionEvents(ctx context.Context
 	return rows.Err()
 }
 
-// ============================================================================
-// NON-PRODUCTION SAFE METRICS (Use with extreme caution)
-// ============================================================================
-
 func (s *cockroachScraper) scrapeRanges(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryRangesNoLeases)
+	rows, err := s.client.QueryContext(ctx, queryRangesNoLeases)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
 	defer rows.Close()
 
-	count := 0
-	for rows.Next() {
-		var (
-			rangeID            sql.NullInt64
-			startKey           sql.NullString
-			startPretty        sql.NullString
-			endKey             sql.NullString
-			endPretty          sql.NullString
-			databaseName       sql.NullString
-			tableName          sql.NullString
-			indexName          sql.NullString
-			replicas           sql.NullString
-			replicaLocalities  sql.NullString
-			votingReplicas     sql.NullString
-			nonVotingReplicas  sql.NullString
-			splitEnforcedUntil sql.NullTime
-		)
+	var totalRanges, underReplicated, unavailable sql.NullInt64
 
-		if err := rows.Scan(&rangeID, &startKey, &startPretty, &endKey, &endPretty,
-			&databaseName, &tableName, &indexName, &replicas, &replicaLocalities,
-			&votingReplicas, &nonVotingReplicas, &splitEnforcedUntil); err != nil {
-			s.logger.Warn("Failed to scan ranges row", zap.Error(err))
-			continue
+	if rows.Next() {
+		if err := rows.Scan(&totalRanges, &underReplicated, &unavailable); err != nil {
+			return fmt.Errorf("scan failed: %w", err)
 		}
-		count++
 	}
 
-	m := sm.Metrics().AppendEmpty()
-	m.SetName("cockroachdb.ranges.count")
-	m.SetDescription("Total number of ranges")
-	m.SetUnit("1")
-	g := m.SetEmptyGauge()
-	dp := g.DataPoints().AppendEmpty()
-	dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
-	dp.SetIntValue(int64(count))
+	timestamp := pcommon.NewTimestampFromTime(time.Now())
+
+	if totalRanges.Valid {
+		m := sm.Metrics().AppendEmpty()
+		m.SetName("cockroachdb.ranges.total")
+		m.SetDescription("Total number of ranges")
+		m.SetUnit("1")
+		g := m.SetEmptyGauge()
+		dp := g.DataPoints().AppendEmpty()
+		dp.SetTimestamp(timestamp)
+		dp.SetIntValue(totalRanges.Int64)
+	}
+
+	if underReplicated.Valid {
+		m := sm.Metrics().AppendEmpty()
+		m.SetName("cockroachdb.ranges.under_replicated")
+		m.SetDescription("Under-replicated ranges")
+		m.SetUnit("1")
+		g := m.SetEmptyGauge()
+		dp := g.DataPoints().AppendEmpty()
+		dp.SetTimestamp(timestamp)
+		dp.SetIntValue(underReplicated.Int64)
+	}
+
+	if unavailable.Valid {
+		m := sm.Metrics().AppendEmpty()
+		m.SetName("cockroachdb.ranges.unavailable")
+		m.SetDescription("Unavailable ranges")
+		m.SetUnit("1")
+		g := m.SetEmptyGauge()
+		dp := g.DataPoints().AppendEmpty()
+		dp.SetTimestamp(timestamp)
+		dp.SetIntValue(unavailable.Int64)
+	}
 
 	return rows.Err()
 }
 
 func (s *cockroachScraper) scrapeGossipLiveness(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryGossipLiveness)
+	rows, err := s.client.QueryContext(ctx, queryGossipLiveness)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -969,22 +922,12 @@ func (s *cockroachScraper) scrapeGossipLiveness(ctx context.Context, sm pmetric.
 
 	liveNodes := 0
 	for rows.Next() {
-		var (
-			nodeID          sql.NullInt64
-			epoch           sql.NullInt64
-			expiration      sql.NullTime
-			draining        sql.NullBool
-			decommissioning sql.NullBool
-			membership      sql.NullString
-			updatedAt       sql.NullTime
-		)
-
-		if err := rows.Scan(&nodeID, &epoch, &expiration, &draining, &decommissioning, &membership, &updatedAt); err != nil {
+		var nodeID, isLive sql.NullInt64
+		if err := rows.Scan(&nodeID, &isLive); err != nil {
 			s.logger.Warn("Failed to scan gossip liveness row", zap.Error(err))
 			continue
 		}
-
-		if !draining.Valid || !draining.Bool {
+		if isLive.Valid && isLive.Int64 == 1 {
 			liveNodes++
 		}
 	}
@@ -1002,7 +945,7 @@ func (s *cockroachScraper) scrapeGossipLiveness(ctx context.Context, sm pmetric.
 }
 
 func (s *cockroachScraper) scrapeJobs(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryJobs)
+	rows, err := s.client.QueryContext(ctx, queryJobs, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -1014,19 +957,12 @@ func (s *cockroachScraper) scrapeJobs(ctx context.Context, sm pmetric.ScopeMetri
 		var (
 			jobID             sql.NullInt64
 			jobType           sql.NullString
-			description       sql.NullString
 			status            sql.NullString
-			created           sql.NullTime
-			started           sql.NullTime
-			finished          sql.NullTime
-			modified          sql.NullTime
+			runningStatus     sql.NullString
 			fractionCompleted sql.NullFloat64
-			errorMsg          sql.NullString
-			coordinatorID     sql.NullInt64
 		)
 
-		if err := rows.Scan(&jobID, &jobType, &description, &status, &created, &started,
-			&finished, &modified, &fractionCompleted, &errorMsg, &coordinatorID); err != nil {
+		if err := rows.Scan(&jobID, &jobType, &status, &runningStatus, &fractionCompleted); err != nil {
 			s.logger.Warn("Failed to scan jobs row", zap.Error(err))
 			continue
 		}
@@ -1054,7 +990,7 @@ func (s *cockroachScraper) scrapeJobs(ctx context.Context, sm pmetric.ScopeMetri
 }
 
 func (s *cockroachScraper) scrapeSchemaChanges(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QuerySchemaChanges)
+	rows, err := s.client.QueryContext(ctx, querySchemaChanges, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -1062,18 +998,8 @@ func (s *cockroachScraper) scrapeSchemaChanges(ctx context.Context, sm pmetric.S
 
 	count := 0
 	for rows.Next() {
-		var (
-			tableID    sql.NullInt64
-			parentID   sql.NullInt64
-			name       sql.NullString
-			changeType sql.NullString
-			targetID   sql.NullInt64
-			targetName sql.NullString
-			state      sql.NullString
-			direction  sql.NullString
-		)
-
-		if err := rows.Scan(&tableID, &parentID, &name, &changeType, &targetID, &targetName, &state, &direction); err != nil {
+		var tableName, changeType, state sql.NullString
+		if err := rows.Scan(&tableName, &changeType, &state); err != nil {
 			s.logger.Warn("Failed to scan schema changes row", zap.Error(err))
 			continue
 		}
@@ -1093,7 +1019,7 @@ func (s *cockroachScraper) scrapeSchemaChanges(ctx context.Context, sm pmetric.S
 }
 
 func (s *cockroachScraper) scrapeNodeMetrics(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryNodeMetrics)
+	rows, err := s.client.QueryContext(ctx, queryNodeMetrics, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -1102,12 +1028,9 @@ func (s *cockroachScraper) scrapeNodeMetrics(ctx context.Context, sm pmetric.Sco
 	timestamp := pcommon.NewTimestampFromTime(time.Now())
 
 	for rows.Next() {
-		var (
-			nodeID  sql.NullInt64
-			storeID sql.NullInt64
-			name    sql.NullString
-			value   sql.NullFloat64
-		)
+		var nodeID, storeID sql.NullInt64
+		var name sql.NullString
+		var value sql.NullFloat64
 
 		if err := rows.Scan(&nodeID, &storeID, &name, &value); err != nil {
 			s.logger.Warn("Failed to scan node metrics row", zap.Error(err))
@@ -1133,7 +1056,7 @@ func (s *cockroachScraper) scrapeNodeMetrics(ctx context.Context, sm pmetric.Sco
 }
 
 func (s *cockroachScraper) scrapeKVNodeStatus(ctx context.Context, sm pmetric.ScopeMetrics) error {
-	rows, err := s.client.QueryContext(ctx, QueryKVNodeStatus)
+	rows, err := s.client.QueryContext(ctx, queryKVNodeStatus, s.config.QueryLimit)
 	if err != nil {
 		return fmt.Errorf("query failed: %w", err)
 	}
@@ -1141,29 +1064,9 @@ func (s *cockroachScraper) scrapeKVNodeStatus(ctx context.Context, sm pmetric.Sc
 
 	count := 0
 	for rows.Next() {
-		var (
-			nodeID        sql.NullInt64
-			network       sql.NullString
-			address       sql.NullString
-			attrs         sql.NullString
-			locality      sql.NullString
-			serverVersion sql.NullString
-			goVersion     sql.NullString
-			tag           sql.NullString
-			time          sql.NullTime
-			revision      sql.NullString
-			cgoCompiler   sql.NullString
-			platform      sql.NullString
-			distribution  sql.NullString
-			nodeType      sql.NullString
-			dependencies  sql.NullString
-			startedAt     sql.NullTime
-			updatedAt     sql.NullTime
-		)
-
-		if err := rows.Scan(&nodeID, &network, &address, &attrs, &locality, &serverVersion,
-			&goVersion, &tag, &time, &revision, &cgoCompiler, &platform, &distribution,
-			&nodeType, &dependencies, &startedAt, &updatedAt); err != nil {
+		var nodeID sql.NullInt64
+		var p50, p99 sql.NullFloat64
+		if err := rows.Scan(&nodeID, &p50, &p99); err != nil {
 			s.logger.Warn("Failed to scan KV node status row", zap.Error(err))
 			continue
 		}

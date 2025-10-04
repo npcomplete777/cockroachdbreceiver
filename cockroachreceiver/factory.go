@@ -3,7 +3,6 @@ package cockroachreceiver
 import (
 	"context"
 	"errors"
-	"time"
 
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
@@ -17,41 +16,9 @@ var typeStr = component.MustNewType("cockroachdb")
 func NewFactory() receiver.Factory {
 	return receiver.NewFactory(
 		typeStr,
-		createDefaultConfig,
+		func() component.Config { return createDefaultConfig() },
 		receiver.WithMetrics(createMetricsReceiver, component.StabilityLevelAlpha),
 	)
-}
-
-func createDefaultConfig() component.Config {
-	return &Config{
-		ConnectionString:      "",
-		CollectionInterval:    "1m",
-		QueryTimeout:          "30s",
-		MaxOpenConnections:    10,
-		MaxIdleConnections:    5,
-		ConnectionMaxLifetime: "1h",
-		ConnectionMaxIdleTime: "10m",
-		Metrics: MetricsConfig{
-			StatementStatistics:         true,
-			TransactionStatistics:       true,
-			IndexUsageStatistics:        true,
-			ClusterQueries:              true,
-			ClusterSessions:             true,
-			ClusterTransactions:         true,
-			ClusterContendedIndexes:     true,
-			ClusterContendedTables:      true,
-			ClusterContentionEvents:     true,
-			ClusterLocks:                false,
-			ClusterContendedKeys:        false,
-			TransactionContentionEvents: false,
-			RangesNoLeases:              false,
-			GossipLiveness:              false,
-			Jobs:                        false,
-			SchemaChanges:               false,
-			NodeMetrics:                 false,
-			KVNodeStatus:                false,
-		},
-	}
 }
 
 func createMetricsReceiver(
@@ -62,19 +29,9 @@ func createMetricsReceiver(
 ) (receiver.Metrics, error) {
 	cockroachCfg := cfg.(*Config)
 
-	interval, err := time.ParseDuration(cockroachCfg.CollectionInterval)
-	if err != nil {
-		return nil, err
-	}
-
 	s := newScraper(cockroachCfg, settings.TelemetrySettings)
 	if s == nil {
 		return nil, errors.New("failed to create scraper")
-	}
-
-	scraperCfg := &scraperhelper.ControllerConfig{
-		CollectionInterval: interval,
-		InitialDelay:       time.Second,
 	}
 
 	sc, err := scraper.NewMetrics(s.scrape, scraper.WithShutdown(s.Shutdown))
@@ -83,7 +40,7 @@ func createMetricsReceiver(
 	}
 
 	return scraperhelper.NewMetricsController(
-		scraperCfg,
+		&cockroachCfg.ControllerConfig,
 		settings,
 		consumer,
 		scraperhelper.AddScraper(typeStr, sc),

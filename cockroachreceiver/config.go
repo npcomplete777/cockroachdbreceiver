@@ -1,80 +1,102 @@
 package cockroachreceiver
 
 import (
-	"fmt"
+	"errors"
 	"time"
+
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 )
 
 type Config struct {
-	ConnectionString string        `mapstructure:"connection_string"`
-	CollectionInterval string      `mapstructure:"collection_interval"`
-	
-	// Connection pool settings
-	MaxOpenConnections int           `mapstructure:"max_open_connections"`
-	MaxIdleConnections int           `mapstructure:"max_idle_connections"`
-	ConnectionMaxLifetime string    `mapstructure:"connection_max_lifetime"`
-	ConnectionMaxIdleTime string    `mapstructure:"connection_max_idle_time"`
-	QueryTimeout string              `mapstructure:"query_timeout"`
-	
-	// Selective metric collection
-	Metrics MetricsConfig `mapstructure:"metrics"`
+	scraperhelper.ControllerConfig `mapstructure:",squash"`
+	ConnectionString               string        `mapstructure:"connection_string"`
+	QueryTimeout                   time.Duration `mapstructure:"query_timeout"`
+	QueryLimit                     int           `mapstructure:"query_limit"`
+	MaxOpenConnections             int           `mapstructure:"max_open_connections"`
+	MaxIdleConnections             int           `mapstructure:"max_idle_connections"`
+	ConnectionMaxLifetime          time.Duration `mapstructure:"connection_max_lifetime"`
+	ConnectionMaxIdleTime          time.Duration `mapstructure:"connection_max_idle_time"`
+	Metrics                        MetricsConfig `mapstructure:"metrics"`
 }
 
 type MetricsConfig struct {
-	// Production-safe metrics (low overhead, recommended for all environments)
-	StatementStatistics    bool `mapstructure:"statement_statistics"`     // Query performance
-	TransactionStatistics  bool `mapstructure:"transaction_statistics"`   // Transaction performance
-	IndexUsageStatistics   bool `mapstructure:"index_usage_statistics"`   // Index usage patterns
-	ClusterQueries         bool `mapstructure:"cluster_queries"`          // Active queries
-	ClusterSessions        bool `mapstructure:"cluster_sessions"`         // Active sessions
-	ClusterTransactions    bool `mapstructure:"cluster_transactions"`     // Active transactions
-	
-	// Production-safe contention metrics (moderate overhead)
-	ClusterLocks              bool `mapstructure:"cluster_locks"`               // Lock states
-	ClusterContendedIndexes   bool `mapstructure:"cluster_contended_indexes"`   // Contended indexes
-	ClusterContendedKeys      bool `mapstructure:"cluster_contended_keys"`      // Contended keys
-	ClusterContendedTables    bool `mapstructure:"cluster_contended_tables"`    // Contended tables
-	ClusterContentionEvents   bool `mapstructure:"cluster_contention_events"`   // Contention history
-	TransactionContentionEvents bool `mapstructure:"transaction_contention_events"` // Detailed contention
-	
-	// NOT production-safe (expensive RPC fan-out, use only for troubleshooting)
-	RangesNoLeases    bool `mapstructure:"ranges_no_leases"`     // Range distribution (EXPENSIVE)
-	GossipLiveness    bool `mapstructure:"gossip_liveness"`      // Node liveness (EXPENSIVE)
-	Jobs              bool `mapstructure:"jobs"`                 // Background jobs (EXPENSIVE)
-	SchemaChanges     bool `mapstructure:"schema_changes"`       // Schema operations (EXPENSIVE)
-	NodeMetrics       bool `mapstructure:"node_metrics"`         // Node-level metrics (EXPENSIVE)
-	KVNodeStatus      bool `mapstructure:"kv_node_status"`       // KV layer status (EXPENSIVE)
+	// Production Safe - Low Overhead
+	StatementStatistics    bool `mapstructure:"statement_statistics"`
+	TransactionStatistics  bool `mapstructure:"transaction_statistics"`
+	IndexUsageStatistics   bool `mapstructure:"index_usage_statistics"`
+	ClusterQueries         bool `mapstructure:"cluster_queries"`
+	ClusterSessions        bool `mapstructure:"cluster_sessions"`
+	ClusterTransactions    bool `mapstructure:"cluster_transactions"`
+
+	// Production Safe - Moderate Overhead
+	ClusterContendedIndexes       bool `mapstructure:"cluster_contended_indexes"`
+	ClusterContendedTables        bool `mapstructure:"cluster_contended_tables"`
+	ClusterContendedKeys          bool `mapstructure:"cluster_contended_keys"`
+	ClusterContentionEvents       bool `mapstructure:"cluster_contention_events"`
+	ClusterLocks                  bool `mapstructure:"cluster_locks"`
+	TransactionContentionEvents   bool `mapstructure:"transaction_contention_events"`
+
+	// Not Production Safe - Expensive
+	RangesNoLeases bool `mapstructure:"ranges_no_leases"`
+	GossipLiveness bool `mapstructure:"gossip_liveness"`
+	Jobs           bool `mapstructure:"jobs"`
+	SchemaChanges  bool `mapstructure:"schema_changes"`
+	NodeMetrics    bool `mapstructure:"node_metrics"`
+	KVNodeStatus   bool `mapstructure:"kv_node_status"`
 }
 
-func (c *Config) Validate() error {
-	if c.ConnectionString == "" {
-		return fmt.Errorf("connection_string is required")
+func (cfg *Config) Validate() error {
+	if cfg.ConnectionString == "" {
+		return errors.New("connection_string is required")
 	}
-	
-	if c.CollectionInterval == "" {
-		c.CollectionInterval = "60s"
+	if cfg.ControllerConfig.CollectionInterval <= 0 {
+		return errors.New("collection_interval must be positive")
 	}
-	
-	if _, err := time.ParseDuration(c.CollectionInterval); err != nil {
-		return fmt.Errorf("invalid collection_interval: %w", err)
+	if cfg.QueryTimeout < 0 {
+		return errors.New("query_timeout must be non-negative")
 	}
-	
-	// Set defaults
-	if c.MaxOpenConnections == 0 {
-		c.MaxOpenConnections = 10
+	if cfg.QueryLimit <= 0 {
+		return errors.New("query_limit must be positive")
 	}
-	if c.MaxIdleConnections == 0 {
-		c.MaxIdleConnections = 5
+	if cfg.MaxOpenConnections <= 0 {
+		return errors.New("max_open_connections must be positive")
 	}
-	if c.ConnectionMaxLifetime == "" {
-		c.ConnectionMaxLifetime = "1h"
+	if cfg.MaxIdleConnections < 0 {
+		return errors.New("max_idle_connections must be non-negative")
 	}
-	if c.ConnectionMaxIdleTime == "" {
-		c.ConnectionMaxIdleTime = "10m"
-	}
-	if c.QueryTimeout == "" {
-		c.QueryTimeout = "30s"
-	}
-	
 	return nil
+}
+
+func createDefaultConfig() *Config {
+	return &Config{
+		ControllerConfig: scraperhelper.ControllerConfig{
+			CollectionInterval: 60 * time.Second,
+		},
+		QueryTimeout:          30 * time.Second,
+		QueryLimit:            20,
+		MaxOpenConnections:    10,
+		MaxIdleConnections:    5,
+		ConnectionMaxLifetime: time.Hour,
+		ConnectionMaxIdleTime: 10 * time.Minute,
+		Metrics: MetricsConfig{
+			StatementStatistics:           true,
+			TransactionStatistics:         true,
+			IndexUsageStatistics:          true,
+			ClusterQueries:                true,
+			ClusterSessions:               true,
+			ClusterTransactions:           true,
+			ClusterContendedIndexes:       true,
+			ClusterContendedTables:        true,
+			ClusterContentionEvents:       true,
+			ClusterContendedKeys:          false,
+			ClusterLocks:                  false,
+			TransactionContentionEvents:   false,
+			RangesNoLeases:                false,
+			GossipLiveness:                false,
+			Jobs:                          false,
+			SchemaChanges:                 false,
+			NodeMetrics:                   false,
+			KVNodeStatus:                  false,
+		},
+	}
 }
