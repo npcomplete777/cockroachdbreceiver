@@ -393,6 +393,30 @@ query_limit: 20  # Collects top 20 queries by execution count
 
 ## Troubleshooting
 
+## Receiver Self-Monitoring
+
+The receiver emits its own telemetry metrics for monitoring health:
+
+| Metric | Description |
+|--------|-------------|
+| `otelcol.cockroachdb.scrape.duration` | Duration of each scrape operation (seconds) |
+| `otelcol.cockroachdb.scrape.errors` | Number of errors in the current scrape |
+| `otelcol.cockroachdb.scrape.total` | Total number of scrapes performed |
+| `otelcol.cockroachdb.scrape.errors.total` | Total number of failed scrapes |
+
+Monitor these metrics to ensure the receiver is functioning properly.
+
+## Important Note on Cardinality
+
+This receiver preserves **full query text** in metric attributes for maximum observability. This design decision means:
+
+- You can see actual SQL queries in your metrics backend
+- Cardinality is controlled by the `query_limit` parameter (default: 20)
+- Suitable for environments where query-level observability is critical
+- May not be appropriate for extremely high-cardinality use cases
+
+If cardinality becomes an issue, reduce `query_limit` or use fingerprint IDs only in your metric backend's processing rules.
+
 ### High Memory Usage
 
 **Symptoms:** Collector using excessive memory
