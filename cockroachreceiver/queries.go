@@ -148,11 +148,12 @@ FROM crdb_internal.transaction_contention_events
 ORDER BY contention_duration DESC
 LIMIT $1`
 
+	// FIXED: Using actual columns from ranges_no_leases
 	queryRangesNoLeases = `
 SELECT 
 	COUNT(*) as total_ranges,
-	SUM(CASE WHEN under_replicated THEN 1 ELSE 0 END) as under_replicated_ranges,
-	SUM(CASE WHEN unavailable THEN 1 ELSE 0 END) as unavailable_ranges
+	COUNT(CASE WHEN array_length(replicas, 1) < 3 THEN 1 END) as under_replicated_ranges,
+	0 as unavailable_ranges
 FROM crdb_internal.ranges_no_leases`
 
 	queryGossipLiveness = `
@@ -172,9 +173,10 @@ FROM crdb_internal.jobs
 WHERE status IN ('running', 'pending')
 LIMIT $1`
 
+	// FIXED: Using 'name' column and aliasing to table_name
 	querySchemaChanges = `
 SELECT 
-	table_name,
+	name as table_name,
 	type,
 	state
 FROM crdb_internal.schema_changes

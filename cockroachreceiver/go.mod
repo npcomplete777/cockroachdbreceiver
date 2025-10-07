@@ -10,7 +10,6 @@ require (
 	go.opentelemetry.io/collector/consumer v1.42.0
 	go.opentelemetry.io/collector/pdata v1.42.0
 	go.opentelemetry.io/collector/receiver v1.42.0
-	go.opentelemetry.io/collector/scraper v0.136.0
 	go.opentelemetry.io/collector/scraper/scraperhelper v0.136.0
 	go.uber.org/zap v1.27.0
 )
@@ -31,6 +30,7 @@ require (
 	go.opentelemetry.io/collector/pdata/pprofile v0.136.0 // indirect
 	go.opentelemetry.io/collector/pipeline v1.42.0 // indirect
 	go.opentelemetry.io/collector/receiver/receiverhelper v0.136.0 // indirect
+	go.opentelemetry.io/collector/scraper v0.136.0 // indirect
 	go.opentelemetry.io/contrib/bridges/otelzap v0.12.0 // indirect
 	go.opentelemetry.io/otel v1.38.0 // indirect
 	go.opentelemetry.io/otel/log v0.14.0 // indirect
