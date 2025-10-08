@@ -201,54 +201,54 @@ func (s *cockroachScraper) scrapeStatementStats(ctx context.Context, db *sql.DB,
 	}
 	defer rows.Close()
 	
-	// Create all statement metrics
+	// Create all statement metrics with OTel-compliant names
 	execCountMetric := sm.Metrics().AppendEmpty()
-	execCountMetric.SetName("cockroachdb.statement.execution_count")
+	execCountMetric.SetName("cockroachdb.statement.execution.count")  // Changed from execution_count
 	execCountMetric.SetUnit("{executions}")
 	execCountMetric.SetEmptyGauge()
 	
 	svcLatMetric := sm.Metrics().AppendEmpty()
-	svcLatMetric.SetName("cockroachdb.statement.service_latency_mean")
+	svcLatMetric.SetName("cockroachdb.statement.latency.service.mean")  // Changed from service_latency_mean
 	svcLatMetric.SetUnit("s")
 	svcLatMetric.SetEmptyGauge()
 	
 	parseLatMetric := sm.Metrics().AppendEmpty()
-	parseLatMetric.SetName("cockroachdb.statement.parse_latency_mean")
+	parseLatMetric.SetName("cockroachdb.statement.latency.parse.mean")  // Changed from parse_latency_mean
 	parseLatMetric.SetUnit("s")
 	parseLatMetric.SetEmptyGauge()
 	
 	planLatMetric := sm.Metrics().AppendEmpty()
-	planLatMetric.SetName("cockroachdb.statement.plan_latency_mean")
+	planLatMetric.SetName("cockroachdb.statement.latency.plan.mean")  // Changed from plan_latency_mean
 	planLatMetric.SetUnit("s")
 	planLatMetric.SetEmptyGauge()
 	
 	runLatMetric := sm.Metrics().AppendEmpty()
-	runLatMetric.SetName("cockroachdb.statement.run_latency_mean")
+	runLatMetric.SetName("cockroachdb.statement.latency.run.mean")  // Changed from run_latency_mean
 	runLatMetric.SetUnit("s")
 	runLatMetric.SetEmptyGauge()
 	
 	rowsReadMetric := sm.Metrics().AppendEmpty()
-	rowsReadMetric.SetName("cockroachdb.statement.rows_read_mean")
+	rowsReadMetric.SetName("cockroachdb.statement.rows.read.mean")  // Changed from rows_read_mean
 	rowsReadMetric.SetUnit("{rows}")
 	rowsReadMetric.SetEmptyGauge()
 	
 	rowsWrittenMetric := sm.Metrics().AppendEmpty()
-	rowsWrittenMetric.SetName("cockroachdb.statement.rows_written_mean")
+	rowsWrittenMetric.SetName("cockroachdb.statement.rows.written.mean")  // Changed from rows_written_mean
 	rowsWrittenMetric.SetUnit("{rows}")
 	rowsWrittenMetric.SetEmptyGauge()
 	
 	bytesReadMetric := sm.Metrics().AppendEmpty()
-	bytesReadMetric.SetName("cockroachdb.statement.bytes_read_mean")
+	bytesReadMetric.SetName("cockroachdb.statement.bytes.read.mean")  // Changed from bytes_read_mean
 	bytesReadMetric.SetUnit("By")
 	bytesReadMetric.SetEmptyGauge()
 	
 	maxRetriesMetric := sm.Metrics().AppendEmpty()
-	maxRetriesMetric.SetName("cockroachdb.statement.max_retries")
+	maxRetriesMetric.SetName("cockroachdb.statement.retries.max")  // Changed from max_retries
 	maxRetriesMetric.SetUnit("{retries}")
 	maxRetriesMetric.SetEmptyGauge()
 	
 	errorCountMetric := sm.Metrics().AppendEmpty()
-	errorCountMetric.SetName("cockroachdb.statement.error_count")
+	errorCountMetric.SetName("cockroachdb.statement.error.count")  // Changed from error_count
 	errorCountMetric.SetUnit("{errors}")
 	errorCountMetric.SetEmptyGauge()
 	
@@ -376,44 +376,44 @@ func (s *cockroachScraper) scrapeTransactionStats(ctx context.Context, db *sql.D
 	}
 	defer rows.Close()
 	
-	// Create transaction metrics
+	// Create transaction metrics with OTel-compliant names
 	txnExecCountMetric := sm.Metrics().AppendEmpty()
-	txnExecCountMetric.SetName("cockroachdb.transaction.execution_count")
+	txnExecCountMetric.SetName("cockroachdb.transaction.execution.count")  // Changed from execution_count
 	txnExecCountMetric.SetUnit("{executions}")
 	txnExecCountMetric.SetEmptyGauge()
 	
 	txnSvcLatMetric := sm.Metrics().AppendEmpty()
-	txnSvcLatMetric.SetName("cockroachdb.transaction.service_latency_mean")
+	txnSvcLatMetric.SetName("cockroachdb.transaction.latency.service.mean")  // Changed from service_latency_mean
 	txnSvcLatMetric.SetUnit("s")
 	txnSvcLatMetric.SetEmptyGauge()
 	
 	txnCommitLatMetric := sm.Metrics().AppendEmpty()
-	txnCommitLatMetric.SetName("cockroachdb.transaction.commit_latency_mean")
+	txnCommitLatMetric.SetName("cockroachdb.transaction.latency.commit.mean")  // Changed from commit_latency_mean
 	txnCommitLatMetric.SetUnit("s")
 	txnCommitLatMetric.SetEmptyGauge()
 	
 	txnRetryLatMetric := sm.Metrics().AppendEmpty()
-	txnRetryLatMetric.SetName("cockroachdb.transaction.retry_latency_mean")
+	txnRetryLatMetric.SetName("cockroachdb.transaction.latency.retry.mean")  // Changed from retry_latency_mean
 	txnRetryLatMetric.SetUnit("s")
 	txnRetryLatMetric.SetEmptyGauge()
 	
 	txnRowsReadMetric := sm.Metrics().AppendEmpty()
-	txnRowsReadMetric.SetName("cockroachdb.transaction.rows_read_mean")
+	txnRowsReadMetric.SetName("cockroachdb.transaction.rows.read.mean")  // Changed from rows_read_mean
 	txnRowsReadMetric.SetUnit("{rows}")
 	txnRowsReadMetric.SetEmptyGauge()
 	
 	txnRowsWrittenMetric := sm.Metrics().AppendEmpty()
-	txnRowsWrittenMetric.SetName("cockroachdb.transaction.rows_written_mean")
+	txnRowsWrittenMetric.SetName("cockroachdb.transaction.rows.written.mean")  // Changed from rows_written_mean
 	txnRowsWrittenMetric.SetUnit("{rows}")
 	txnRowsWrittenMetric.SetEmptyGauge()
 	
 	txnBytesReadMetric := sm.Metrics().AppendEmpty()
-	txnBytesReadMetric.SetName("cockroachdb.transaction.bytes_read_mean")
+	txnBytesReadMetric.SetName("cockroachdb.transaction.bytes.read.mean")  // Changed from bytes_read_mean
 	txnBytesReadMetric.SetUnit("By")
 	txnBytesReadMetric.SetEmptyGauge()
 	
 	txnMaxRetriesMetric := sm.Metrics().AppendEmpty()
-	txnMaxRetriesMetric.SetName("cockroachdb.transaction.max_retries")
+	txnMaxRetriesMetric.SetName("cockroachdb.transaction.retries.max")  // Changed from max_retries
 	txnMaxRetriesMetric.SetUnit("{retries}")
 	txnMaxRetriesMetric.SetEmptyGauge()
 	
@@ -512,12 +512,12 @@ func (s *cockroachScraper) scrapeIndexUsage(ctx context.Context, db *sql.DB, sm 
 	defer rows.Close()
 	
 	totalReadsMetric := sm.Metrics().AppendEmpty()
-	totalReadsMetric.SetName("cockroachdb.index.total_reads")
+	totalReadsMetric.SetName("cockroachdb.index.reads.total")  // Changed from total_reads
 	totalReadsMetric.SetUnit("{reads}")
 	totalReadsMetric.SetEmptyGauge()
 	
 	lastReadMetric := sm.Metrics().AppendEmpty()
-	lastReadMetric.SetName("cockroachdb.index.seconds_since_last_read")
+	lastReadMetric.SetName("cockroachdb.index.seconds_since_last_read")  // Keep as is - follows pattern
 	lastReadMetric.SetUnit("s")
 	lastReadMetric.SetEmptyGauge()
 	
@@ -562,12 +562,12 @@ func (s *cockroachScraper) scrapeClusterQueries(ctx context.Context, db *sql.DB,
 	defer rows.Close()
 	
 	activeQueriesMetric := sm.Metrics().AppendEmpty()
-	activeQueriesMetric.SetName("cockroachdb.cluster.queries.active")
+	activeQueriesMetric.SetName("cockroachdb.cluster.queries.active")  // Already correct
 	activeQueriesMetric.SetUnit("{queries}")
 	activeQueriesMetric.SetEmptyGauge()
 	
 	queryDurationMetric := sm.Metrics().AppendEmpty()
-	queryDurationMetric.SetName("cockroachdb.cluster.queries.duration")
+	queryDurationMetric.SetName("cockroachdb.cluster.queries.duration")  // Already correct
 	queryDurationMetric.SetUnit("s")
 	queryDurationMetric.SetEmptyGauge()
 	
@@ -628,17 +628,17 @@ func (s *cockroachScraper) scrapeClusterSessions(ctx context.Context, db *sql.DB
 	defer rows.Close()
 	
 	activeSessionsMetric := sm.Metrics().AppendEmpty()
-	activeSessionsMetric.SetName("cockroachdb.cluster.sessions.active")
+	activeSessionsMetric.SetName("cockroachdb.cluster.sessions.active")  // Already correct
 	activeSessionsMetric.SetUnit("{sessions}")
 	activeSessionsMetric.SetEmptyGauge()
 	
 	sessionMemoryMetric := sm.Metrics().AppendEmpty()
-	sessionMemoryMetric.SetName("cockroachdb.cluster.sessions.memory_allocated")
+	sessionMemoryMetric.SetName("cockroachdb.cluster.sessions.memory_allocated")  // Already correct
 	sessionMemoryMetric.SetUnit("By")
 	sessionMemoryMetric.SetEmptyGauge()
 	
 	sessionAgeMetric := sm.Metrics().AppendEmpty()
-	sessionAgeMetric.SetName("cockroachdb.cluster.sessions.age")
+	sessionAgeMetric.SetName("cockroachdb.cluster.sessions.age")  // Already correct
 	sessionAgeMetric.SetUnit("s")
 	sessionAgeMetric.SetEmptyGauge()
 	
@@ -709,12 +709,12 @@ func (s *cockroachScraper) scrapeClusterTransactions(ctx context.Context, db *sq
 	defer rows.Close()
 	
 	activeTxnMetric := sm.Metrics().AppendEmpty()
-	activeTxnMetric.SetName("cockroachdb.cluster.transactions.active")
+	activeTxnMetric.SetName("cockroachdb.cluster.transactions.active")  // Already correct
 	activeTxnMetric.SetUnit("{transactions}")
 	activeTxnMetric.SetEmptyGauge()
 	
 	txnDurationMetric := sm.Metrics().AppendEmpty()
-	txnDurationMetric.SetName("cockroachdb.cluster.transactions.duration")
+	txnDurationMetric.SetName("cockroachdb.cluster.transactions.duration")  // Already correct
 	txnDurationMetric.SetUnit("s")
 	txnDurationMetric.SetEmptyGauge()
 	
@@ -788,7 +788,7 @@ func (s *cockroachScraper) scrapeContendedIndexes(ctx context.Context, db *sql.D
 	defer rows.Close()
 	
 	contentionMetric := sm.Metrics().AppendEmpty()
-	contentionMetric.SetName("cockroachdb.contention.index.events")
+	contentionMetric.SetName("cockroachdb.contention.index.events")  // Already correct
 	contentionMetric.SetUnit("{events}")
 	contentionMetric.SetEmptyGauge()
 	
@@ -831,7 +831,7 @@ func (s *cockroachScraper) scrapeContendedTables(ctx context.Context, db *sql.DB
 	defer rows.Close()
 	
 	contentionMetric := sm.Metrics().AppendEmpty()
-	contentionMetric.SetName("cockroachdb.contention.table.events")
+	contentionMetric.SetName("cockroachdb.contention.table.events")  // Already correct
 	contentionMetric.SetUnit("{events}")
 	contentionMetric.SetEmptyGauge()
 	
@@ -871,7 +871,7 @@ func (s *cockroachScraper) scrapeContentionEvents(ctx context.Context, db *sql.D
 	defer rows.Close()
 	
 	contentionTimeMetric := sm.Metrics().AppendEmpty()
-	contentionTimeMetric.SetName("cockroachdb.contention.cumulative_time")
+	contentionTimeMetric.SetName("cockroachdb.contention.time.cumulative")  // Changed from cumulative_time
 	contentionTimeMetric.SetUnit("s")
 	contentionTimeMetric.SetEmptyGauge()
 	
@@ -912,12 +912,12 @@ func (s *cockroachScraper) scrapeJobs(ctx context.Context, db *sql.DB, sm pmetri
 	defer rows.Close()
 	
 	jobsMetric := sm.Metrics().AppendEmpty()
-	jobsMetric.SetName("cockroachdb.jobs.active")
+	jobsMetric.SetName("cockroachdb.jobs.active")  // Already correct
 	jobsMetric.SetUnit("{jobs}")
 	jobsMetric.SetEmptyGauge()
 	
 	progressMetric := sm.Metrics().AppendEmpty()
-	progressMetric.SetName("cockroachdb.jobs.progress")
+	progressMetric.SetName("cockroachdb.jobs.progress")  // Already correct
 	progressMetric.SetUnit("%")
 	progressMetric.SetEmptyGauge()
 	
@@ -971,7 +971,7 @@ func (s *cockroachScraper) scrapeSchemaChanges(ctx context.Context, db *sql.DB, 
 	defer rows.Close()
 	
 	changeCountMetric := sm.Metrics().AppendEmpty()
-	changeCountMetric.SetName("cockroachdb.schema_changes.active")
+	changeCountMetric.SetName("cockroachdb.schema_changes.active")  // Already correct
 	changeCountMetric.SetUnit("{changes}")
 	changeCountMetric.SetEmptyGauge()
 	
@@ -1006,12 +1006,12 @@ func (s *cockroachScraper) scrapeNodeMetrics(ctx context.Context, db *sql.DB, sm
 	defer rows.Close()
 	
 	cpuMetric := sm.Metrics().AppendEmpty()
-	cpuMetric.SetName("cockroachdb.node.cpu.percent")
+	cpuMetric.SetName("cockroachdb.node.cpu.percent")  // Already correct
 	cpuMetric.SetUnit("%")
 	cpuMetric.SetEmptyGauge()
 	
 	memoryMetric := sm.Metrics().AppendEmpty()
-	memoryMetric.SetName("cockroachdb.node.memory.rss")
+	memoryMetric.SetName("cockroachdb.node.memory.rss")  // Already correct
 	memoryMetric.SetUnit("By")
 	memoryMetric.SetEmptyGauge()
 	
@@ -1062,7 +1062,7 @@ func (s *cockroachScraper) scrapeRangeMetrics(ctx context.Context, db *sql.DB, s
 	}
 	
 	totalMetric := sm.Metrics().AppendEmpty()
-	totalMetric.SetName("cockroachdb.ranges.total")
+	totalMetric.SetName("cockroachdb.ranges.total")  // Already correct
 	totalMetric.SetUnit("{ranges}")
 	totalMetric.SetEmptyGauge()
 	dp := totalMetric.Gauge().DataPoints().AppendEmpty()
@@ -1070,7 +1070,7 @@ func (s *cockroachScraper) scrapeRangeMetrics(ctx context.Context, db *sql.DB, s
 	dp.SetIntValue(totalRanges)
 	
 	underRepMetric := sm.Metrics().AppendEmpty()
-	underRepMetric.SetName("cockroachdb.ranges.under_replicated")
+	underRepMetric.SetName("cockroachdb.ranges.under_replicated")  // Already correct
 	underRepMetric.SetUnit("{ranges}")
 	underRepMetric.SetEmptyGauge()
 	dp = underRepMetric.Gauge().DataPoints().AppendEmpty()
@@ -1078,7 +1078,7 @@ func (s *cockroachScraper) scrapeRangeMetrics(ctx context.Context, db *sql.DB, s
 	dp.SetIntValue(underReplicatedRanges)
 	
 	unavailMetric := sm.Metrics().AppendEmpty()
-	unavailMetric.SetName("cockroachdb.ranges.unavailable")
+	unavailMetric.SetName("cockroachdb.ranges.unavailable")  // Already correct
 	unavailMetric.SetUnit("{ranges}")
 	unavailMetric.SetEmptyGauge()
 	dp = unavailMetric.Gauge().DataPoints().AppendEmpty()
@@ -1090,7 +1090,7 @@ func (s *cockroachScraper) scrapeRangeMetrics(ctx context.Context, db *sql.DB, s
 
 func (s *cockroachScraper) recordReceiverMetrics(sm pmetric.ScopeMetrics, now pcommon.Timestamp, errorCount int) {
 	successMetric := sm.Metrics().AppendEmpty()
-	successMetric.SetName("cockroachdb.receiver.scrape_success")
+	successMetric.SetName("cockroachdb.receiver.scrape_success")  // Already correct
 	successMetric.SetEmptyGauge()
 	dp := successMetric.Gauge().DataPoints().AppendEmpty()
 	dp.SetTimestamp(now)
@@ -1101,7 +1101,7 @@ func (s *cockroachScraper) recordReceiverMetrics(sm pmetric.ScopeMetrics, now pc
 	}
 	
 	errorMetric := sm.Metrics().AppendEmpty()
-	errorMetric.SetName("cockroachdb.receiver.scrape_errors")
+	errorMetric.SetName("cockroachdb.receiver.scrape_errors")  // Already correct
 	errorMetric.SetEmptyGauge()
 	dp = errorMetric.Gauge().DataPoints().AppendEmpty()
 	dp.SetTimestamp(now)

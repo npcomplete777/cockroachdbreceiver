@@ -1,0 +1,46 @@
+# CockroachDB Serverless Configuration
+# Note: Some metrics are not available in Serverless clusters
+
+receivers:
+  cockroachdb:
+    connection_string: "${env:COCKROACH_CONNECTION_STRING}"
+    collection_interval: "60s"
+    query_timeout: "30s"
+    query_limit: 20
+    
+    metrics:
+      # Available in Serverless
+      statement_statistics: true
+      transaction_statistics: true
+      index_usage_statistics: true
+      cluster_queries: true
+      cluster_sessions: true
+      cluster_transactions: true
+      cluster_contended_indexes: true
+      cluster_contended_tables: true
+      cluster_contention_events: true
+      
+      # NOT available in Serverless - keep disabled
+      ranges_no_leases: false
+      gossip_liveness: false
+      jobs: false
+      schema_changes: false
+      node_metrics: false
+      kv_node_status: false
+
+processors:
+  batch:
+    timeout: 10s
+
+exporters:
+  otlphttp:
+    endpoint: "${env:OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Bearer ${env:API_TOKEN}"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [cockroachdb]
+      processors: [batch]
+      exporters: [otlphttp]

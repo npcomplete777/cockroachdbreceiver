@@ -1,0 +1,309 @@
+type: cockroachdb
+
+status:
+  class: receiver
+  stability:
+    alpha: [metrics]
+  distributions: []
+  codeowners:
+    active: [npcomplete777]
+
+resource_attributes:
+  db.system:
+    description: The database system
+    type: string
+    enabled: true
+    enum: [cockroachdb]
+
+attributes:
+  fingerprint_id:
+    description: Statement fingerprint ID
+    type: string
+  app_name:
+    description: Application name
+    type: string
+  database:
+    description: Database name
+    type: string
+  query:
+    description: SQL query text
+    type: string
+  statement_type:
+    description: Type of SQL statement
+    type: string
+  last_error_code:
+    description: Last error code for the statement
+    type: string
+  table:
+    description: Table name
+    type: string
+  index:
+    description: Index name
+    type: string
+  schema:
+    description: Schema name
+    type: string
+  user:
+    description: User name
+    type: string
+  session_id:
+    description: Session identifier
+    type: string
+  lock_strength:
+    description: Lock strength type
+    type: string
+  granted:
+    description: Whether lock was granted
+    type: bool
+  node_id:
+    description: Node identifier
+    type: int
+  status:
+    description: Job or operation status
+    type: string
+
+metrics:
+  cockroachdb.statement.execution.count:
+    enabled: true
+    description: Number of times this statement was executed
+    unit: "{executions}"
+    gauge:
+      value_type: int
+    attributes: [fingerprint_id, app_name, database, query, statement_type]
+
+  cockroachdb.statement.error.count:
+    enabled: true
+    description: Number of errors for this statement
+    unit: "{errors}"
+    gauge:
+      value_type: int
+    attributes: [fingerprint_id, app_name, query, last_error_code]
+
+  cockroachdb.statement.retries.max:
+    enabled: true
+    description: Maximum number of retries for this statement
+    unit: "{retries}"
+    gauge:
+      value_type: int
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.latency.service.mean:
+    enabled: true
+    description: Average service latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.latency.parse.mean:
+    enabled: true
+    description: Average parsing latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.latency.plan.mean:
+    enabled: true
+    description: Average planning latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.latency.run.mean:
+    enabled: true
+    description: Average execution latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.rows.read.mean:
+    enabled: true
+    description: Average rows read
+    unit: "{rows}"
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.rows.written.mean:
+    enabled: true
+    description: Average rows written
+    unit: "{rows}"
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.statement.bytes.read.mean:
+    enabled: true
+    description: Average bytes read
+    unit: By
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name, query]
+
+  cockroachdb.transaction.execution.count:
+    enabled: true
+    description: Transaction execution count
+    unit: "{transactions}"
+    gauge:
+      value_type: int
+    attributes: [fingerprint_id, app_name]
+
+  cockroachdb.transaction.latency.service:
+    enabled: true
+    description: Average transaction service latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name]
+
+  cockroachdb.transaction.latency.commit:
+    enabled: true
+    description: Average commit latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name]
+
+  cockroachdb.transaction.latency.retry:
+    enabled: true
+    description: Average retry latency
+    unit: s
+    gauge:
+      value_type: double
+    attributes: [fingerprint_id, app_name]
+
+  cockroachdb.index.reads.total:
+    enabled: true
+    description: Total number of reads from this index
+    unit: "{reads}"
+    gauge:
+      value_type: int
+    attributes: [table, index]
+
+  cockroachdb.cluster.queries.active:
+    enabled: true
+    description: Number of currently active queries
+    unit: "{queries}"
+    gauge:
+      value_type: int
+
+  cockroachdb.cluster.sessions.active:
+    enabled: true
+    description: Number of active sessions
+    unit: "{sessions}"
+    gauge:
+      value_type: int
+
+  cockroachdb.cluster.transactions.active:
+    enabled: true
+    description: Number of active transactions
+    unit: "{transactions}"
+    gauge:
+      value_type: int
+
+  cockroachdb.session.memory.allocated:
+    enabled: true
+    description: Memory allocated by session
+    unit: By
+    gauge:
+      value_type: int
+    attributes: [session_id, user, app_name]
+
+  cockroachdb.cluster.locks.count:
+    enabled: true
+    description: Number of locks
+    unit: "{locks}"
+    gauge:
+      value_type: int
+    attributes: [database, table, lock_strength, granted]
+
+  cockroachdb.index.contention.events:
+    enabled: true
+    description: Number of contention events on index
+    unit: "{events}"
+    gauge:
+      value_type: int
+    attributes: [database, schema, table, index]
+
+  cockroachdb.key.contention.events:
+    enabled: true
+    description: Number of contention events on specific key
+    unit: "{events}"
+    gauge:
+      value_type: int
+    attributes: [database, table, index]
+
+  cockroachdb.table.contention.events:
+    enabled: true
+    description: Number of contention events on table
+    unit: "{events}"
+    gauge:
+      value_type: int
+    attributes: [database, schema, table]
+
+  cockroachdb.contention.events.total:
+    enabled: true
+    description: Total contention events
+    unit: "{events}"
+    gauge:
+      value_type: int
+
+  cockroachdb.transaction.contention.events.count:
+    enabled: true
+    description: Recent transaction contention events
+    unit: "{events}"
+    gauge:
+      value_type: int
+
+  cockroachdb.ranges.total:
+    enabled: true
+    description: Total number of ranges
+    unit: "{ranges}"
+    gauge:
+      value_type: int
+
+  cockroachdb.ranges.under_replicated:
+    enabled: true
+    description: Under-replicated ranges
+    unit: "{ranges}"
+    gauge:
+      value_type: int
+
+  cockroachdb.ranges.unavailable:
+    enabled: true
+    description: Unavailable ranges
+    unit: "{ranges}"
+    gauge:
+      value_type: int
+
+  cockroachdb.nodes.live:
+    enabled: true
+    description: Number of live nodes
+    unit: "{nodes}"
+    gauge:
+      value_type: int
+
+  cockroachdb.nodes.total:
+    enabled: true
+    description: Total number of nodes in cluster
+    unit: "{nodes}"
+    gauge:
+      value_type: int
+
+  cockroachdb.jobs.count:
+    enabled: true
+    description: Number of jobs by status
+    unit: "{jobs}"
+    gauge:
+      value_type: int
+    attributes: [status]
+
+  cockroachdb.schema_changes.active:
+    enabled: true
+    description: Number of active schema changes
+    unit: "{changes}"
+    gauge:
+      value_type: int
