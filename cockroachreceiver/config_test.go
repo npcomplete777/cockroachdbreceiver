@@ -1,10 +1,20 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
 package cockroachreceiver
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/confmap/confmaptest"
 	"go.opentelemetry.io/collector/scraper/scraperhelper"
+
+	"github.com/npcomplete777/cockroachdb-receiver/cockroachreceiver/internal/metadata"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -96,24 +106,71 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 			errMsg:  "max_query_length must be at least 50 characters or 0 for unlimited (got 25)",
 		},
+		{
+			name: "max_query_length zero is valid (unlimited)",
+			config: Config{
+				ConnectionString: "postgresql://user:pass@localhost:26257/db",
+				ControllerConfig: scraperhelper.ControllerConfig{
+					CollectionInterval: time.Minute,
+				},
+				QueryTimeout:   30 * time.Second,
+				QueryLimit:     20,
+				MaxQueryLength: 0,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.config.Validate()
 			if tt.wantErr {
-				if err == nil {
-					t.Errorf("Validate() expected error containing %q, got nil", tt.errMsg)
-					return
-				}
-				if err.Error() != tt.errMsg {
-					t.Errorf("Validate() error = %v, want %v", err, tt.errMsg)
-				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.errMsg)
 			} else {
-				if err != nil {
-					t.Errorf("Validate() unexpected error = %v", err)
-				}
+				require.NoError(t, err)
 			}
 		})
 	}
+}
+
+func TestLoadConfig(t *testing.T) {
+	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
+	require.NoError(t, err)
+
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig()
+
+	sub, err := cm.Sub(component.NewIDWithName(metadata.Type, "").String())
+	require.NoError(t, err)
+	require.NoError(t, sub.Unmarshal(cfg))
+
+	expected := factory.CreateDefaultConfig().(*Config)
+	expected.ConnectionString = "postgresql://root@localhost:26257/defaultdb?sslmode=disable"
+	expected.ControllerConfig.CollectionInterval = 30 * time.Second
+	expected.QueryTimeout = 30 * time.Second
+	expected.QueryLimit = 100
+	expected.MaxQueryLength = 200
+	assert.Equal(t, expected, cfg)
+}
+
+func TestLoadConfigAll(t *testing.T) {
+	cm, err := confmaptest.LoadConf(filepath.Join("testdata", "config.yaml"))
+	require.NoError(t, err)
+
+	factory := NewFactory()
+	cfg := factory.CreateDefaultConfig()
+
+	sub, err := cm.Sub(component.NewIDWithName(metadata.Type, "all").String())
+	require.NoError(t, err)
+	require.NoError(t, sub.Unmarshal(cfg))
+
+	cockroachCfg := cfg.(*Config)
+	assert.Equal(t, "postgresql://root@localhost:26257/defaultdb?sslmode=disable", cockroachCfg.ConnectionString)
+	assert.Equal(t, 60*time.Second, cockroachCfg.ControllerConfig.CollectionInterval)
+	assert.Equal(t, 45*time.Second, cockroachCfg.QueryTimeout)
+	assert.Equal(t, 50, cockroachCfg.QueryLimit)
+	assert.Equal(t, 500, cockroachCfg.MaxQueryLength)
+	assert.True(t, cockroachCfg.Metrics.CockroachdbRangesTotal.Enabled)
+	assert.True(t, cockroachCfg.Metrics.CockroachdbNodesLive.Enabled)
 }
