@@ -1,0 +1,62 @@
+# Development / troubleshooting configuration.
+# Enables every metric the receiver supports, including the expensive ones.
+# Use this for dev, staging, or active incident response — not steady-state
+# production monitoring.
+
+receivers:
+  cockroachdb:
+    connection_string: "postgresql://admin:CHANGE_ME@dev.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+
+    collection_interval: 30s
+    query_timeout: 60s
+    query_limit: 50
+    max_query_length: 0       # 0 = no truncation; useful when debugging slow queries
+
+    max_open_connections: 15
+    max_idle_connections: 5
+    connection_max_lifetime: 1h
+    connection_max_idle_time: 10m
+
+    metrics:
+      statement_statistics: true
+      transaction_statistics: true
+      index_usage_statistics: true
+      cluster_queries: true
+      cluster_sessions: true
+      cluster_transactions: true
+
+      cluster_contended_indexes: true
+      cluster_contended_tables: true
+      cluster_contention_events: true
+      cluster_contended_keys: true
+      cluster_locks: true
+      transaction_contention_events: true
+
+      jobs: true
+      schema_changes: true
+      ranges_no_leases: true
+      node_metrics: true
+      gossip_liveness: true        # Dedicated/self-hosted only
+      kv_node_status: true         # Dedicated/self-hosted only
+
+processors:
+  batch:
+    timeout: 5s
+
+exporters:
+  debug:
+    verbosity: detailed
+  otlphttp:
+    endpoint: "https://your-metrics-backend.example.com"
+    headers:
+      Authorization: "Bearer YOUR_API_KEY"
+
+service:
+  telemetry:
+    logs:
+      level: debug
+  pipelines:
+    metrics:
+      receivers: [cockroachdb]
+      processors: [batch]
+      exporters: [debug, otlphttp]

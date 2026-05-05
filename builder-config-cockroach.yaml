@@ -1,0 +1,19 @@
+dist:
+  name: otelcol-cockroachdb
+  description: OpenTelemetry Collector with CockroachDB receiver
+  output_path: ./otelcol-cockroachdb
+
+extensions:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/opampextension v0.136.0
+
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.136.0
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.136.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.136.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.136.0
+
+receivers:
+  - gomod: github.com/npcomplete777/cockroachdb-receiver/cockroachreceiver v0.0.1
+    path: ./cockroachreceiver

@@ -1,0 +1,72 @@
+# Production configuration: CockroachDB Cloud Dedicated or self-hosted clusters.
+#
+# Tested against the implementation in cockroachreceiver/. All keys here are
+# accepted by the receiver's mapstructure schema as of this version.
+
+receivers:
+  cockroachdb:
+    # Required: PostgreSQL-protocol DSN to your CockroachDB cluster.
+    # sslmode=verify-full requires the cluster CA at ~/.postgresql/root.crt;
+    # use sslmode=require if you have not placed it.
+    connection_string: "postgresql://monitoring_user:CHANGE_ME@your-cluster.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full"
+
+    collection_interval: 60s
+    query_timeout: 30s
+    query_limit: 20            # top-N rows per scrape, ordered by execution count
+    max_query_length: 200      # truncate query_text attribute (0 = unlimited)
+
+    # Connection pool
+    max_open_connections: 10
+    max_idle_connections: 5
+    connection_max_lifetime: 1h
+    connection_max_idle_time: 10m
+
+    metrics:
+      # Production-safe core metrics — low overhead, designed for continuous monitoring
+      statement_statistics: true
+      transaction_statistics: true
+      index_usage_statistics: true
+      cluster_queries: true
+      cluster_sessions: true
+      cluster_transactions: true
+
+      # Production-safe contention summaries
+      cluster_contended_indexes: true
+      cluster_contended_tables: true
+      cluster_contention_events: true
+
+      # Detailed contention — moderate overhead, enable for active investigations
+      cluster_contended_keys: false
+      cluster_locks: false
+      transaction_contention_events: false
+
+      # Cluster-wide RPCs / KV-layer queries — only available on Dedicated and
+      # self-hosted clusters. Leave off on Serverless (see serverless.yaml).
+      jobs: true
+      schema_changes: true
+      ranges_no_leases: true
+      node_metrics: true
+      gossip_liveness: true
+      kv_node_status: true
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  otlphttp:
+    endpoint: "https://your-metrics-backend.example.com"
+    headers:
+      Authorization: "Bearer YOUR_API_KEY"
+    compression: gzip
+
+service:
+  telemetry:
+    logs:
+      level: info
+  pipelines:
+    metrics:
+      receivers: [cockroachdb]
+      processors: [batch]
+      exporters: [otlphttp]

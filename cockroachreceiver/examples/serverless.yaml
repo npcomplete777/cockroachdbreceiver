@@ -1,0 +1,73 @@
+# Serverless / virtual-cluster configuration.
+#
+# CockroachDB Cloud Serverless tenants run as virtual clusters where some
+# crdb_internal tables are gated:
+#
+#   * AVAILABLE: statement_statistics, transaction_statistics,
+#     index_usage_statistics, cluster_{queries,sessions,transactions},
+#     cluster_contended_*, cluster_contention_events, cluster_locks,
+#     transaction_contention_events, jobs, schema_changes,
+#     ranges_no_leases, node_metrics
+#
+#   * UNSUPPORTED on virtual clusters (queries return
+#     "operation is unsupported within a virtual cluster"):
+#     gossip_liveness, kv_node_status
+#
+# Enabling an unsupported metric is safe: the receiver logs the failure,
+# increments cockroachdb.receiver.scrape_errors, and emits the rest of the
+# scrape unaffected.
+
+receivers:
+  cockroachdb:
+    connection_string: "postgresql://aaron:CHANGE_ME@your-tenant.gcp-us-east1.cockroachlabs.cloud:26257/defaultdb?sslmode=require"
+
+    collection_interval: 60s
+    query_timeout: 30s
+    query_limit: 20
+    max_query_length: 200
+
+    max_open_connections: 5
+    max_idle_connections: 2
+    connection_max_lifetime: 30m
+    connection_max_idle_time: 5m
+
+    metrics:
+      statement_statistics: true
+      transaction_statistics: true
+      index_usage_statistics: true
+      cluster_queries: true
+      cluster_sessions: true
+      cluster_transactions: true
+
+      cluster_contended_indexes: true
+      cluster_contended_tables: true
+      cluster_contention_events: true
+      cluster_contended_keys: false
+      cluster_locks: false
+      transaction_contention_events: false
+
+      jobs: true
+      schema_changes: true
+      ranges_no_leases: true
+      node_metrics: true
+
+      # Disabled: unsupported on virtual clusters.
+      gossip_liveness: false
+      kv_node_status: false
+
+processors:
+  batch:
+    timeout: 10s
+
+exporters:
+  otlphttp:
+    endpoint: "https://your-metrics-backend.example.com"
+    headers:
+      Authorization: "Bearer YOUR_API_KEY"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [cockroachdb]
+      processors: [batch]
+      exporters: [otlphttp]

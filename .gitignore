@@ -1,0 +1,61 @@
+# Binaries
+otelcol-cockroachdb/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+otelcol-*
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# Build artifacts
+dist/
+build/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+*.pem
+
+# Config files with secrets (example configs are ok)
+config.yaml
+*-config.yaml
+!example-config.yaml
+!builder-config-cockroach.yaml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Log files
+*.log
+
+# Test output
+testdata/output/
+
+# OCB generated files
+components.go
+main.go
+config-BACKUP.yaml
